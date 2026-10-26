@@ -1,6 +1,7 @@
 // Hoạt Cảnh Buồng Lái Xe Cảnh Sát 3D Chân Thực, Chi Tiết Cao & Sáng Rõ
 import * as THREE from 'three';
 import { audioManager } from './audio.js';
+import { playerInventory, HOSOSO_VU_AN_DEFAULT } from './playerInventoryAndCharacter.js';
 
 export class DrivingScene3D {
   constructor(canvas, onStepOutOfCar, onReturnToMenu) {
@@ -8,6 +9,10 @@ export class DrivingScene3D {
     this.onStepOutOfCar = onStepOutOfCar;
     this.onReturnToMenu = onReturnToMenu;
     this.isPaused = false;
+    this.seatFocusTarget = null; // 'pistol' | 'clipboard' | null
+
+    // Khởi tạo lại túi đồ khi bắt đầu màn lái xe
+    playerInventory.resetForNewGame();
 
     // Three.js Scene, Camera, Renderer
     this.scene = new THREE.Scene();
@@ -399,6 +404,11 @@ export class DrivingScene3D {
         <div class="driving-prompt-hint">[Hội thoại tự chạy • Click chuột hoặc nhấn Space để tiếp tục nhanh • ESC: Tạm dừng]</div>
       </div>
 
+      <!-- Khung nhắc tương tác Ghế Phụ: Nhặt Súng Lục [E] hoặc Cầm Tập Hồ Sơ Đọc [E] -->
+      <div class="fp-prompt" id="driving-seat-prompt" style="display: none; top: 48%; pointer-events: auto; cursor: pointer; z-index: 65;">
+        ⚜ [E] Tương tác trang bị trên ghế phụ
+      </div>
+
       <!-- Banner bấm E để xuống xe -->
       <div class="driving-stepout-banner" id="driving-stepout-banner" style="display: none; cursor: pointer;">
         <span class="key-box">E</span> NHẤN [E] ĐỂ BƯỚC XUỐNG XE & ĐIỀU TRA HIỆN TRƯỜNG
@@ -421,13 +431,53 @@ export class DrivingScene3D {
 
     this.speakerEl = this.uiContainer.querySelector('#driving-speaker');
     this.textEl = this.uiContainer.querySelector('#driving-text');
+    this.seatPromptEl = this.uiContainer.querySelector('#driving-seat-prompt');
     this.stepoutBannerEl = this.uiContainer.querySelector('#driving-stepout-banner');
     this.pauseModalEl = this.uiContainer.querySelector('#driving-pause-modal');
     this.btnResume = this.uiContainer.querySelector('#btn-driving-resume');
     this.btnExit = this.uiContainer.querySelector('#btn-driving-exit');
 
+    this.interactWithPassengerSeat = () => {
+      if (this.seatFocusTarget === 'pistol' && !playerInventory.hasPickedPistolInCar) {
+        playerInventory.hasPickedPistolInCar = true;
+        if (this.pistolGroup) this.pistolGroup.visible = false;
+        audioManager.playPickup();
+        playerInventory.addItem({
+          id: 'pistol',
+          name: 'Súng Lục Cảnh Sát 9mm',
+          icon: '🔫',
+          count: 1,
+          desc: 'Súng ngắn bán tự động trang bị 100 viên đạn 9mm. Click chuột trái để bắn, nhấn [Q] để ném.'
+        });
+        if (playerInventory.uiState === 0) {
+          playerInventory.uiState = 1;
+          playerInventory.renderUI();
+        }
+        return true;
+      }
+
+      if (this.seatFocusTarget === 'clipboard') {
+        playerInventory.hasPickedCaseFileInCar = true;
+        audioManager.playPickup();
+        playerInventory.addItem(HOSOSO_VU_AN_DEFAULT);
+        if (playerInventory.uiState === 0) {
+          playerInventory.uiState = 1;
+          playerInventory.renderUI();
+        }
+        playerInventory.openCaseFileModal(HOSOSO_VU_AN_DEFAULT);
+        return true;
+      }
+      return false;
+    };
+
+    this.seatPromptEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.interactWithPassengerSeat();
+    });
+
     this.stepOut = () => {
       if (this.isPaused) return;
+      playerInventory.closeCaseFileModal();
       this.destroy();
       if (this.onStepOutOfCar) this.onStepOutOfCar();
     };
@@ -438,6 +488,10 @@ export class DrivingScene3D {
     });
 
     this.togglePause = () => {
+      if (playerInventory.isReadingDoc) {
+        playerInventory.closeCaseFileModal();
+        return;
+      }
       this.isPaused = !this.isPaused;
       this.pauseModalEl.style.display = this.isPaused ? 'flex' : 'none';
       audioManager.playClick();
@@ -451,13 +505,15 @@ export class DrivingScene3D {
     this.btnExit.addEventListener('click', (e) => {
       e.stopPropagation();
       audioManager.playClick();
+      playerInventory.uiState = 0;
+      playerInventory.renderUI();
       this.destroy();
       if (this.onReturnToMenu) this.onReturnToMenu();
     });
 
     this.advanceDialogue = (e) => {
-      if (this.isPaused || this.isFinishedDialogues) return;
-      if (e && e.target && e.target.closest('#driving-pause-modal')) return;
+      if (this.isPaused || playerInventory.isReadingDoc || playerInventory.uiState === 2 || this.isFinishedDialogues) return;
+      if (e && e.target && (e.target.closest('#driving-pause-modal') || e.target.closest('#bf-inventory-system') || e.target.closest('#driving-seat-prompt'))) return;
 
       const cur = this.dialogues[this.dialogueIndex];
       if (this.dialogueCharIndex < cur.text.length) {
@@ -494,7 +550,30 @@ export class DrivingScene3D {
       }
       if (this.isPaused) return;
 
+      // Phím G: Chu trình 3 trạng thái Túi Đồ (1: Thanh 9 ô -> 2: Mở Túi Đồ + Nhân Vật -> 3: Đóng hết)
+      if (e.code === 'KeyG') {
+        e.preventDefault();
+        playerInventory.cycleInventoryState();
+        return;
+      }
+
+      // Phím 1..9 chọn ô trong Hotbar
+      if (e.code.startsWith('Digit')) {
+        const num = parseInt(e.code.replace('Digit', ''), 10);
+        if (num >= 1 && num <= 9) {
+          playerInventory.selectSlot(num - 1);
+        }
+      }
+
       if (e.code === 'KeyE' || e.key === 'e' || e.key === 'E') {
+        if (playerInventory.isReadingDoc) {
+          playerInventory.closeCaseFileModal();
+          return;
+        }
+        // Nếu người chơi đang quay sang nhìn ghế phụ -> Ưu tiên nhặt Súng Lục hoặc cầm Tập Hồ Sơ đọc!
+        if (this.seatFocusTarget && this.interactWithPassengerSeat()) {
+          return;
+        }
         if (this.isStopping || this.isFinishedDialogues) {
           this.stepOut();
           return;
@@ -910,6 +989,7 @@ export class DrivingScene3D {
     pistolGroup.add(brassRound);
 
     this.carInterior.add(pistolGroup);
+    this.pistolGroup = pistolGroup;
 
     // ---------------------------------------------------------
     // B. KẸP HỒ SƠ BIÊN BẢN VỤ ÁN & BÚT BI (POLICE CASE CLIPBOARD)
@@ -949,6 +1029,7 @@ export class DrivingScene3D {
     clipGroup.add(pen);
 
     this.carInterior.add(clipGroup);
+    this.clipGroup = clipGroup;
 
     // ---------------------------------------------------------
     // C. ĐÈN PIN CHIẾN THUẬT CẢNH SÁT (HEAVY-DUTY FLASHLIGHT)
@@ -1203,6 +1284,22 @@ export class DrivingScene3D {
     const engineVib = Math.sin(now * 0.035) * 0.0018;
     this.camera.rotation.y = this.currentRotation.yaw;
     this.camera.rotation.x = this.currentRotation.pitch + engineVib;
+
+    // Kiểm tra hướng nhìn của người chơi sang ghế phụ (yaw < -0.22) để hiện nút Nhặt Súng [E] hoặc Cầm Tập Hồ Sơ Đọc [E]
+    if (this.currentRotation.yaw < -0.22 && !playerInventory.isReadingDoc) {
+      if (!playerInventory.hasPickedPistolInCar && this.currentRotation.yaw > -0.62) {
+        this.seatFocusTarget = 'pistol';
+        this.seatPromptEl.textContent = '🔫 [E] NHẶT SÚNG LỤC CẢNH SÁT BỎ VÀO TÚI ĐỒ (100 VIÊN ĐẠN)';
+        this.seatPromptEl.style.display = 'block';
+      } else {
+        this.seatFocusTarget = 'clipboard';
+        this.seatPromptEl.textContent = '📋 [E] CẦM TẬP HỒ SƠ VỤ ÁN LÊN ĐỌC';
+        this.seatPromptEl.style.display = 'block';
+      }
+    } else {
+      this.seatFocusTarget = null;
+      if (this.seatPromptEl) this.seatPromptEl.style.display = 'none';
+    }
 
     // 2. Chuyển động xe chạy trên đường
     if (this.isStopping) {

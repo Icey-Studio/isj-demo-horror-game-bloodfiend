@@ -532,6 +532,98 @@ class HorrorAudioManager {
     osc.start(now);
     osc.stop(now + 0.05);
   }
+
+  // Tiếng súng lục 9mm nổ đanh thép có tiếng vang (9mm Tactical Pistol Gunshot)
+  playGunshot() {
+    if (!this.ctx || this.isMuted) return;
+    const now = this.ctx.currentTime;
+
+    // 1. Tiếng nổ thuốc súng (White Noise Burst)
+    const bufferSize = Math.floor(this.ctx.sampleRate * 0.28);
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.14));
+    }
+    const noise = this.ctx.createBufferSource();
+    noise.buffer = buffer;
+
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(3200, now);
+    filter.frequency.exponentialRampToValueAtTime(220, now + 0.25);
+
+    const noiseGain = this.ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.95, now);
+    noiseGain.gain.exponentialRampToValueAtTime(0.005, now + 0.26);
+
+    noise.connect(filter);
+    filter.connect(noiseGain);
+    noiseGain.connect(this.masterGain);
+    noise.start(now);
+
+    // 2. Xung trầm đầu nòng (Low-End Punch)
+    const punch = this.ctx.createOscillator();
+    punch.type = 'triangle';
+    punch.frequency.setValueAtTime(190, now);
+    punch.frequency.exponentialRampToValueAtTime(32, now + 0.12);
+
+    const punchGain = this.ctx.createGain();
+    punchGain.gain.setValueAtTime(0.85, now);
+    punchGain.gain.exponentialRampToValueAtTime(0.001, now + 0.14);
+
+    punch.connect(punchGain);
+    punchGain.connect(this.masterGain);
+    punch.start(now);
+    punch.stop(now + 0.15);
+  }
+
+  // Tiếng cò súng cạch khi hết đạn (Dry Fire Click)
+  playEmptyGunClick() {
+    if (!this.ctx || this.isMuted) return;
+    const now = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(1400, now);
+    osc.frequency.exponentialRampToValueAtTime(350, now + 0.035);
+
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.35, now);
+    gain.gain.exponentialRampToValueAtTime(0.005, now + 0.04);
+
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+    osc.start(now);
+    osc.stop(now + 0.045);
+  }
+
+  // Tiếng lật giấy đọc hồ sơ (Paper Rustle)
+  playPageTurn() {
+    if (!this.ctx || this.isMuted) return;
+    const now = this.ctx.currentTime;
+    const bufferSize = Math.floor(this.ctx.sampleRate * 0.16);
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.sin((i / bufferSize) * Math.PI);
+    }
+    const noise = this.ctx.createBufferSource();
+    noise.buffer = buffer;
+
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(2400, now);
+    filter.Q.setValueAtTime(1.8, now);
+
+    const gain = this.ctx.createGain();
+    gain.gain.setValueAtTime(0.28, now);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(this.masterGain);
+    noise.start(now);
+  }
 }
 
 export const audioManager = new HorrorAudioManager();

@@ -1189,6 +1189,467 @@ body, html {
   100% { transform: scale(1.05); }
 }
 
+/* ============================================================================
+   HỆ THỐNG TÚI ĐỒ 3 TRẠNG THÁI [G], NHÂN VẬT SĨ QUAN AN & HỒ SƠ VỤ ÁN (#bf-inventory-system)
+   ============================================================================ */
+#bf-inventory-system {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 120;
+  font-family: var(--font-pixel-body, 'VT323', monospace);
+}
+
+/* 1. Thanh 9 Ô Hotbar ở dưới màn hình (Bấm [G] lần 1) */
+.mc-hotbar-wrapper {
+  position: fixed;
+  bottom: 66px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+  z-index: 125;
+}
+
+.mc-hotbar-tooltip,
+.mc-selected-item-label {
+  background: rgba(14, 10, 18, 0.92);
+  border: 1px solid #c9933b;
+  color: #ffd166;
+  font-family: var(--font-retro-title);
+  font-size: 0.72rem;
+  padding: 5px 14px;
+  box-shadow: 0 0 14px rgba(0, 0, 0, 0.85);
+  letter-spacing: 1px;
+}
+
+.mc-hotbar-subhint {
+  font-size: 1rem;
+  color: #d6d0dc;
+  background: rgba(10, 8, 14, 0.82);
+  padding: 2px 10px;
+  border: 1px solid rgba(201, 147, 59, 0.45);
+}
+
+.mc-hotbar-grid {
+  display: grid;
+  grid-template-columns: repeat(9, 54px);
+  gap: 4px;
+  background: rgba(24, 22, 28, 0.94);
+  border: 3px solid #5a524c;
+  outline: 2px solid #18141a;
+  padding: 5px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.9);
+}
+
+.mc-slot {
+  width: 54px;
+  height: 54px;
+  background: #36333b;
+  border-top: 3px solid #1b191e;
+  border-left: 3px solid #1b191e;
+  border-right: 3px solid #6e6875;
+  border-bottom: 3px solid #6e6875;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 0.1s ease, border-color 0.15s ease;
+}
+
+.mc-slot:hover {
+  background: #47434e;
+}
+
+.mc-slot.selected {
+  border: 3px solid #ffd166;
+  outline: 2px solid #ffffff;
+  background: #4c3f36;
+  transform: scale(1.06);
+  z-index: 2;
+}
+
+.mc-slot-key {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  font-size: 0.75rem;
+  color: #9e98a8;
+  font-family: monospace;
+  line-height: 1;
+}
+
+.mc-slot-icon,
+.slot-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  font-size: 1.55rem;
+}
+
+.mc-slot-badge,
+.mc-slot-count {
+  position: absolute;
+  bottom: 2px;
+  right: 4px;
+  font-size: 0.78rem;
+  font-weight: bold;
+  color: #ffea88;
+  text-shadow: 1px 1px 2px #000, -1px -1px 2px #000;
+  font-family: monospace;
+}
+
+/* 2. Cửa sổ Túi Đồ Đầy Đủ + Khung Nhân Vật Sĩ Quan An (Bấm [G] lần 2) */
+.mc-full-inventory-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 4, 10, 0.78);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  z-index: 130;
+}
+
+.mc-inventory-window {
+  width: 660px;
+  max-width: 95vw;
+  background: #c6c6c6;
+  border-top: 4px solid #ffffff;
+  border-left: 4px solid #ffffff;
+  border-right: 4px solid #555555;
+  border-bottom: 4px solid #555555;
+  outline: 3px solid #141218;
+  padding: 16px 20px;
+  color: #222;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.95);
+}
+
+.mc-inv-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid #8b8b8b;
+}
+
+.mc-inv-title {
+  font-family: var(--font-retro-title);
+  font-size: 0.78rem;
+  color: #1f1b24;
+  letter-spacing: 1px;
+}
+
+.mc-inv-hint {
+  font-size: 1rem;
+  color: #444;
+  font-weight: bold;
+}
+
+.mc-inv-top-section {
+  display: flex;
+  gap: 14px;
+  align-items: stretch;
+  margin-bottom: 14px;
+}
+
+.mc-armor-column {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mc-armor-slot {
+  background: #8b8b8b;
+  border-top: 3px solid #373737;
+  border-left: 3px solid #373737;
+  border-right: 3px solid #ffffff;
+  border-bottom: 3px solid #ffffff;
+}
+
+.mc-armor-icon {
+  font-size: 1.35rem;
+  opacity: 0.85;
+}
+
+/* Ô đen hiển thị nhân vật Sĩ quan An theo dõi con trỏ chuột (như Minecraft) */
+.mc-character-preview-box {
+  width: 190px;
+  height: 228px;
+  background: #0c0e14;
+  border-top: 4px solid #373737;
+  border-left: 4px solid #373737;
+  border-right: 4px solid #ffffff;
+  border-bottom: 4px solid #ffffff;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+#mc-character-canvas {
+  width: 180px;
+  height: 220px;
+  display: block;
+}
+
+.mc-char-nameplate,
+.mc-char-nametag {
+  position: absolute;
+  bottom: 4px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 0.82rem;
+  color: #ffd166;
+  background: rgba(0, 0, 0, 0.68);
+  padding: 2px 4px;
+  font-family: monospace;
+}
+
+.mc-item-detail-panel,
+.mc-item-inspector {
+  flex: 1;
+  background: #222028;
+  border-top: 3px solid #111;
+  border-left: 3px solid #111;
+  border-right: 3px solid #eef;
+  border-bottom: 3px solid #eef;
+  padding: 12px 14px;
+  color: #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.mc-detail-title,
+.mc-inspector-title {
+  font-family: var(--font-retro-title);
+  font-size: 0.78rem;
+  color: #ffd166;
+  margin-bottom: 6px;
+}
+
+.mc-detail-desc,
+.mc-inspector-desc {
+  font-size: 1.15rem;
+  line-height: 1.45;
+  color: #d1d5db;
+}
+
+.mc-detail-actions,
+.mc-inspector-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.mc-action-chip,
+.mc-action-btn {
+  background: #3a3542;
+  border: 1px solid #8c6d3b;
+  color: #ffea9f;
+  padding: 4px 10px;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.mc-action-chip.clickable:hover,
+.mc-action-btn:hover {
+  background: #8c6d3b;
+  color: #fff;
+}
+
+.mc-inv-section-label,
+.mc-storage-label {
+  font-family: var(--font-retro-title);
+  font-size: 0.68rem;
+  color: #333;
+  margin: 8px 0 5px 0;
+}
+
+.mc-storage-grid,
+.mc-modal-hotbar-grid {
+  display: grid;
+  grid-template-columns: repeat(9, 54px);
+  gap: 4px;
+  justify-content: center;
+  background: #9e9e9e;
+  padding: 6px;
+  border: 2px solid #555;
+}
+
+/* 3. Giao diện Đọc Tập Hồ Sơ Vụ Án & Tài Liệu Mật (Case File Clipboard Modal) */
+.case-file-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 4, 8, 0.86);
+  backdrop-filter: blur(5px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  z-index: 145;
+}
+
+.case-clipboard-board {
+  width: 680px;
+  max-width: 94vw;
+  background: #5c3a1e;
+  border: 4px solid #38210f;
+  border-radius: 8px;
+  padding: 28px 24px 20px 24px;
+  position: relative;
+  box-shadow: 0 25px 70px rgba(0, 0, 0, 0.95);
+}
+
+.case-clipboard-clip,
+.case-metal-clip {
+  width: 160px;
+  height: 26px;
+  background: linear-gradient(180deg, #d8dde6 0%, #7d8590 100%);
+  border: 2px solid #2b3038;
+  border-radius: 4px;
+  margin: -40px auto 14px auto;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.6);
+}
+
+.case-paper-sheet {
+  background: #f5ecd7;
+  border: 2px solid #c9b58c;
+  padding: 24px 28px;
+  color: #1f1a16;
+  box-shadow: inset 0 0 35px rgba(139, 98, 45, 0.25);
+  position: relative;
+}
+
+.case-paper-header,
+.case-doc-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  border-bottom: 3px double #7a1218;
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+}
+
+.case-agency {
+  font-weight: bold;
+  font-size: 1.05rem;
+  color: #4a3b2c;
+  letter-spacing: 1px;
+}
+
+.case-doc-title {
+  font-family: var(--font-retro-title);
+  font-size: 0.85rem;
+  color: #7a0c12;
+  margin-top: 6px;
+  line-height: 1.4;
+}
+
+.case-code-badge {
+  font-family: monospace;
+  font-weight: bold;
+  font-size: 0.95rem;
+  background: #1f1a16;
+  color: #ffd166;
+  padding: 4px 10px;
+}
+
+.case-stamp,
+.case-stamp-badge {
+  border: 3px solid #b5121b;
+  color: #b5121b;
+  font-weight: bold;
+  font-family: monospace;
+  font-size: 1rem;
+  padding: 4px 10px;
+  transform: rotate(-8deg);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+.case-page-heading {
+  font-size: 1.35rem;
+  color: #1a2d4c;
+  margin-bottom: 4px;
+  font-weight: bold;
+}
+
+.case-page-meta {
+  font-size: 1.05rem;
+  color: #5c4d3c;
+  font-style: italic;
+  margin-bottom: 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px dashed #b59f79;
+}
+
+.case-page-content p,
+.case-doc-body p,
+.case-doc-body li {
+  font-size: 1.22rem;
+  line-height: 1.65;
+  color: #1c1612;
+  margin-bottom: 10px;
+}
+
+.case-paper-footer,
+.case-doc-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 2px solid #c9b58c;
+}
+
+.case-page-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.case-nav-btn,
+.case-close-btn {
+  font-family: var(--font-retro-title);
+  font-size: 0.68rem;
+  padding: 8px 14px;
+  cursor: pointer;
+  border: 2px solid #2b2118;
+  background: #d8c39c;
+  color: #1f1610;
+}
+
+.case-nav-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.case-close-btn {
+  background: #8a1117;
+  color: #fff;
+  border-color: #4a0509;
+}
+
+.case-close-btn:hover {
+  background: #b81820;
+}
+
+
 
 
 

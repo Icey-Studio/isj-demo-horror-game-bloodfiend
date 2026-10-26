@@ -1,7 +1,13 @@
-// Thế Giới 3D Góc Nhìn Thứ Nhất Trau Chuốt (High-Polish First-Person Horror World) - Three.js
+// Thế Giới 3D Góc Nhìn Thứ Nhất & Thứ Ba Trau Chuốt (High-Polish Horror World) - Three.js
 import * as THREE from 'three';
 import { audioManager } from './audio.js';
 import { VHSPlayer } from './vhsPlayer.js';
+import {
+  playerInventory,
+  HOSOSO_VU_AN_DEFAULT,
+  createOfficerAn3DCharacter
+} from './playerInventoryAndCharacter.js';
+import { buildMansionInterior } from './mansionInterior3D.js';
 
 export class HorrorWorld3D {
   constructor(canvas, onReturnToMenu, options = {}) {
@@ -15,36 +21,54 @@ export class HorrorWorld3D {
     this.verticalVelocity = 0;
     this.lastSpacePressTime = 0;
 
+    // Góc nhìn camera ('first-person' | 'third-person-back' | 'third-person-front') đổi bằng phím [U]
+    this.cameraViewMode = 'first-person';
+
+    // Danh sách hộp va chạm vật lý AABB (chống đi xuyên tường, cây cối, xe cộ và nội thất)
+    this.colliders = [];
+    this.interactables = [];
+    this.thrownItems = [];
+    this.bulletImpacts = [];
+    this.raycaster = new THREE.Raycaster();
+
     // Thiết lập Three.js Scene, Camera & WebGL Renderer
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.FogExp2(0x040307, 0.042);
+    this.scene.fog = new THREE.FogExp2(0x040307, 0.036);
 
-    this.camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 200);
+    this.camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 220);
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.1;
+    this.renderer.toneMappingExposure = 1.15;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-    // Vị trí người chơi ban đầu
-    this.camera.position.set(0, 1.65, 2.5);
+    // Vị trí mắt thật của nhân vật Sĩ quan An
+    this.playerPos = new THREE.Vector3(0, 1.68, 2.5);
+    this.camera.position.copy(this.playerPos);
     this.cameraRotation = { yaw: 0, pitch: 0 };
     this.flashlightTargetPos = new THREE.Vector3();
 
     // Biến trạng thái người chơi
     this.keys = {};
-    this.hasKnife = false;
+    this.hasKnife = playerInventory.hasItem('combat_knife');
     this.hasWatchedVideo = false;
     this.hasInspectedTruck = false;
     this.isFlashlightOn = true;
-    this.moveSpeed = 4.2;
+    this.moveSpeed = 4.5;
     this.stepTimer = 0;
     this.headBobTimer = 0;
+    this.currentFloorLabel = 'BÌA RỪNG CẤM';
 
-    // Tạo Canvas Textures thủ công cho độ chân thực cao (Nexus Logistics, Đá Gothic, Gỗ Lim, Kính Cửa Sổ)
+    // Khởi tạo giao diện Túi Đồ 3 trạng thái [G] & Hồ Sơ Vụ Án
+    playerInventory.initUI();
+    playerInventory.onNotification = (msg) => this.showMonologue(msg, 4500);
+    playerInventory.onEquipChange = () => this.syncEquippedViewmodels();
+
+    // Tạo Canvas Textures thủ công cho độ chân thực cao (Nexus Logistics, Hộp Thuốc Y Tế, Đá Gothic, Gỗ Lim)
     this.textures = this.generateProceduralTextures();
+    this.textures.mansionBrick = this.textures.stoneBrick;
 
     // UI Overlay
     this.createUIOverlay();
@@ -52,7 +76,9 @@ export class HorrorWorld3D {
     // Thiết lập Ánh sáng & Cảnh quan
     this.setupLighting();
     this.buildWorld();
-    this.buildFirstPersonKnife(); // Xây dựng mô hình dao cầm trên tay góc nhìn thứ nhất
+    this.buildFirstPersonKnife(); // Xây dựng mô hình dao, súng lục 100 viên & tập hồ sơ góc nhìn thứ nhất
+    this.buildThirdPersonAvatar(); // Xây dựng mô hình 3D Sĩ quan An (giống ảnh người chơi gửi) cho góc nhìn [U]
+    this.syncEquippedViewmodels();
 
     // Áp dụng cấu hình chế độ chơi (Sáng tạo / Sinh tồn)
     this.applyGameMode(this.mode, false);
@@ -68,10 +94,19 @@ export class HorrorWorld3D {
 
     // Lời dẫn đầu game
     if (this.mode === 'creative') {
-      this.showMonologue("Chế độ Sáng Tạo: Trời sáng rực rỡ! Nhấn Space để nhảy, nhấp Space 2 lần liên tiếp để bay lên như Minecraft!", 7500);
+      this.showMonologue("Chế độ Sáng Tạo: Trời sáng rực rỡ! Bấm [G] mở túi đồ, [U] đổi góc nhìn nhân vật, [SPACE x2] để bay lượn!", 7500);
     } else {
-      this.showMonologue("An: 'Chiếc xe cảnh sát đã dừng lại ở bìa rừng... Phải tiến lại chiếc xe giao hàng Nexus gặp nạn phía trước để xem chuyện gì xảy ra.'", 6500);
+      this.showMonologue("An: 'Đã tới bìa rừng... Bấm [G] để bật thanh túi đồ, [U] đổi góc nhìn, hoặc lại gần xe cảnh sát bấm [E] nếu chưa lấy Súng & Hồ sơ.'", 7500);
     }
+  }
+
+  // Hàm tiện ích đăng ký hộp va chạm vật lý AABB (chống đi xuyên vật thể)
+  addCollider(minX, maxX, minY, maxY, minZ, maxZ, label = 'prop') {
+    this.colliders.push({ minX, maxX, minY, maxY, minZ, maxZ, label });
+  }
+
+  showNotification(text) {
+    this.showMonologue(text, 6000);
   }
 
   // Tự sinh Texture độ phân giải cao cho Nexus Logistics, Đá Lâu Đài Gothic, Gỗ Lim, Kính Cửa Sổ
@@ -437,6 +472,87 @@ export class HorrorWorld3D {
     const doorWood = new THREE.CanvasTexture(doorCanvas);
     doorWood.colorSpace = THREE.SRGBColorSpace;
 
+    // 7. Texture Hộp Thuốc Y Tế & Bảo Quản Huyết Thanh Nexus (Detailed Pharmaceutical MedBox)
+    const medCanvas = document.createElement('canvas');
+    medCanvas.width = 256;
+    medCanvas.height = 256;
+    const mCtx = medCanvas.getContext('2d');
+    mCtx.fillStyle = '#eef3f9';
+    mCtx.fillRect(0, 0, 256, 256);
+    // Dải xanh y tế Nexus trên và dưới
+    mCtx.fillStyle = '#0e2d5c';
+    mCtx.fillRect(0, 0, 256, 48);
+    mCtx.fillRect(0, 210, 256, 46);
+    mCtx.fillStyle = '#1e68cc';
+    mCtx.fillRect(0, 48, 256, 8);
+    // Chữ NEXUS BIOPHARMA
+    mCtx.fillStyle = '#ffffff';
+    mCtx.font = 'bold 22px Arial, sans-serif';
+    mCtx.textAlign = 'center';
+    mCtx.fillText('NEXUS BIOPHARMA', 128, 32);
+    // Chữ thập y tế màu đỏ nổi bật bên trái
+    mCtx.fillStyle = '#d91b24';
+    mCtx.fillRect(28, 86, 54, 18);
+    mCtx.fillRect(46, 68, 18, 54);
+    // Thông tin nhãn thuốc & mã vạch bên phải
+    mCtx.fillStyle = '#0e2d5c';
+    mCtx.textAlign = 'left';
+    mCtx.font = 'bold 17px monospace';
+    mCtx.fillText('SERUM H-04 (50ml)', 96, 84);
+    mCtx.fillStyle = '#8a1117';
+    mCtx.font = 'bold 14px monospace';
+    mCtx.fillText('☣ BIO-HAZARD LV.4', 96, 108);
+    mCtx.fillStyle = '#2b3a4a';
+    mCtx.font = '13px monospace';
+    mCtx.fillText('STORAGE: -20°C COLD', 96, 128);
+    mCtx.fillText('LOT: #NX-1998-B09', 28, 158);
+    // Mã vạch (Barcode)
+    for (let bx = 28; bx < 220; bx += (bx % 3 === 0 ? 6 : 4)) {
+      mCtx.fillStyle = '#111111';
+      mCtx.fillRect(bx, 170, bx % 2 === 0 ? 3 : 1.5, 28);
+    }
+    mCtx.fillStyle = '#a8d1ff';
+    mCtx.textAlign = 'center';
+    mCtx.font = 'bold 14px Arial, sans-serif';
+    mCtx.fillText('STERILE MEDICAL COLD-CHAIN', 128, 238);
+    // Viền khung kim loại quanh hộp thuốc
+    mCtx.strokeStyle = '#6c7c90';
+    mCtx.lineWidth = 6;
+    mCtx.strokeRect(3, 3, 250, 250);
+    const nexusMedBox = new THREE.CanvasTexture(medCanvas);
+    nexusMedBox.colorSpace = THREE.SRGBColorSpace;
+
+    // 8. Texture Thùng Carton Vận Chuyển Dược Phẩm Nexus (Detailed Pharmaceutical Shipping Carton)
+    const cartonCanvas = document.createElement('canvas');
+    cartonCanvas.width = 256;
+    cartonCanvas.height = 256;
+    const cCtx = cartonCanvas.getContext('2d');
+    cCtx.fillStyle = '#9c6b3b';
+    cCtx.fillRect(0, 0, 256, 256);
+    cCtx.strokeStyle = '#633f1d';
+    cCtx.lineWidth = 6;
+    cCtx.strokeRect(4, 4, 248, 248);
+    // Băng keo niêm phong Nexus ở giữa
+    cCtx.fillStyle = '#d8c29d';
+    cCtx.fillRect(0, 114, 256, 28);
+    cCtx.fillStyle = '#0f2b5c';
+    cCtx.font = 'bold 15px Arial, sans-serif';
+    cCtx.textAlign = 'center';
+    cCtx.fillText('NEXUS SEALED • DO NOT TAMPER', 128, 133);
+    // Nhãn vận đơn trắng dán trên thùng
+    cCtx.fillStyle = '#f5f5f0';
+    cCtx.fillRect(24, 24, 130, 74);
+    cCtx.fillStyle = '#b81414';
+    cCtx.font = 'bold 14px monospace';
+    cCtx.textAlign = 'left';
+    cCtx.fillText('⚠ FRAGILE VIALS', 32, 44);
+    cCtx.fillStyle = '#111';
+    cCtx.font = '12px monospace';
+    cCtx.fillText('TO: DR. BINH ESTATE', 32, 64);
+    cCtx.fillText('QTY: 24 AMPULES', 32, 82);
+    const nexusCarton = new THREE.CanvasTexture(cartonCanvas);
+    nexusCarton.colorSpace = THREE.SRGBColorSpace;
+
     return {
       asphalt: createNoiseTexture(256, 256, '#1a1820', '#2d2938', 0.8),
       mud: createNoiseTexture(256, 256, '#0f0c09', '#1a140d', 0.9),
@@ -448,7 +564,9 @@ export class HorrorWorld3D {
       camcorderLcd,
       stoneBrick,
       gothicWindow,
-      doorWood
+      doorWood,
+      nexusMedBox,
+      nexusCarton
     };
   }
 
@@ -464,11 +582,14 @@ export class HorrorWorld3D {
       <div class="fp-prompt" id="fp-prompt" style="display: none;">[E] Tương tác</div>
       <div class="fp-monologue" id="fp-monologue"></div>
 
-      <!-- Góc trên bên phải: Nút mở Menu Tạm Dừng [ESC] & Trạng thái Bay (chỉ hiện ở Sáng Tạo) -->
+      <!-- Góc trên bên phải: Nút mở Menu Tạm Dừng [ESC], Góc nhìn [U] & Trạng thái Bay -->
       <div class="fp-mode-badge">
         <button class="pixel-btn btn-secondary" id="fp-btn-pause" style="padding: 8px 14px; font-size: 0.72rem; border-color: #8c6d3b; color: #e2c893;">
           ⚜ MENU [ESC]
         </button>
+        <div class="fp-mode-pill" id="fp-view-pill" style="background: rgba(16, 28, 48, 0.88); border: 1px solid #5fa8ff; color: #bfe0ff; padding: 5px 10px; font-size: 0.7rem;">
+          🎥 GÓC NHÌN: THỨ NHẤT [U]
+        </div>
         <div class="fp-mode-pill flying" id="fp-fly-pill" style="display: none;">
           🕊 ĐANG BAY [SPACE x2: HẠ CÁNH]
         </div>
@@ -477,10 +598,10 @@ export class HorrorWorld3D {
       <div class="fp-hud-bottom">
         <div class="fp-inventory">
           <div class="fp-slot active" id="slot-flashlight">⚜ 🔦 ĐÈN PIN [F: BẬT]</div>
-          <div class="fp-slot" id="slot-knife">⚜ 🗡 TAY KHÔNG</div>
+          <div class="fp-slot" id="slot-knife">⚜ 🎒 TÚI ĐỒ [G] • ĐỔI GÓC NHÌN [U]</div>
         </div>
         <div class="fp-help">
-          [WASD] Di chuyển | [SPACE] Nhảy${this.mode === 'creative' ? ' / [SPACE x2] Bay' : ''} | [SHIFT] Chạy | [F] Đèn pin | [ESC] Tạm dừng / Menu
+          [WASD] Di chuyển | [G] Túi đồ (3 nấc) | [1-9] Chọn ô | [U] Đổi góc nhìn | [Q] Ném đồ | [CLICK] Bắn/Đọc/Chém | [E] Tương tác
         </div>
       </div>
 
@@ -943,10 +1064,28 @@ export class HorrorWorld3D {
     car.add(hlL);
     car.add(hlR);
 
+    // Súng lục & Tập hồ sơ vụ án đặt trên ghế phụ bên trong xe cảnh sát (hiển thị nếu chưa nhặt)
+    this.cruiserCaseFileMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.32, 0.04, 0.42),
+      new THREE.MeshStandardMaterial({ color: 0xd8c298, roughness: 0.7 })
+    );
+    this.cruiserCaseFileMesh.position.set(0.45, 0.96, -0.15);
+    this.cruiserCaseFileMesh.visible = !playerInventory.hasItem('case_file');
+    car.add(this.cruiserCaseFileMesh);
+
+    this.cruiserPistolMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.16, 0.12, 0.28),
+      new THREE.MeshStandardMaterial({ color: 0x22262e, metalness: 0.85, roughness: 0.25 })
+    );
+    this.cruiserPistolMesh.position.set(0.25, 0.98, 0.12);
+    this.cruiserPistolMesh.visible = !playerInventory.hasItem('service_pistol');
+    car.add(this.cruiserPistolMesh);
+
     this.scene.add(car);
+    this.addCollider(x - 1.1, x + 1.1, 0, 2.0, z - 2.35, z + 2.35, 'police_car');
   }
 
-  // XE GIAO HÀNG NEXUS - THÙNG XE RỖNG THẤY TOÀN BỘ BÊN TRONG (HOLLOW CARGO CONTAINER)
+  // XE GIAO HÀNG NEXUS - THÙNG XE RỖNG THẤY TOÀN BỘ BÊN TRONG & CÁC HỘP THUỐC CHI TIẾT
   buildCrashedDeliveryTruck(x, y, z) {
     const truck = new THREE.Group();
     truck.position.set(x, y, z);
@@ -1055,40 +1194,121 @@ export class HorrorWorld3D {
     truck.add(doorR);
 
     // G. ĐÈN TRẦN CHIẾU SÁNG TRONG THÙNG HÀNG (INTERIOR CARGO DOME LIGHT)
-    const cargoDomeLight = new THREE.PointLight(0xffddaa, 3.2, 6.5);
+    const cargoDomeLight = new THREE.PointLight(0xffddaa, 3.6, 7.5);
     cargoDomeLight.position.set(0, 2.65, 2.0);
     truck.add(cargoDomeLight);
 
     // ========================================================
-    // 3. CHI TIẾT HÀNG HÓA VÀ THIẾT BỊ BÊN TRONG THÙNG XE
+    // 3. CHI TIẾT HỘP THUỐC Y TẾ NEXUS, KHAY ỐNG NGHIỆM HUYẾT THANH & THIẾT BỊ TRONG THÙNG XE
     // ========================================================
-    // Kệ sắt 3 tầng gắn ở vách trái bên trong thùng xe (Cargo Shelving Rack)
-    const rackMat = new THREE.MeshStandardMaterial({ color: 0x556070, metalness: 0.8, roughness: 0.3 });
+    const rackMat = new THREE.MeshStandardMaterial({ color: 0x3b4452, metalness: 0.85, roughness: 0.28 });
+    const medBoxMat = new THREE.MeshStandardMaterial({
+      map: this.textures.nexusMedBox,
+      roughness: 0.35,
+      metalness: 0.15
+    });
+    const medLidMat = new THREE.MeshStandardMaterial({ color: 0x0e2d5c, roughness: 0.3, metalness: 0.4 });
+    const redCrossMat = new THREE.MeshBasicMaterial({ color: 0xe61924 });
+    const latchMat = new THREE.MeshStandardMaterial({ color: 0xc8d2dc, metalness: 0.9, roughness: 0.2 });
+    const vialRedMat = new THREE.MeshBasicMaterial({ color: 0xff1838 });
+    const vialCyanMat = new THREE.MeshBasicMaterial({ color: 0x00f0d8 });
+
+    // 4 Thanh trụ đứng của giá kệ y tế
+    [[-1.16, 0.3], [-0.74, 0.3], [-1.16, 3.3], [-0.74, 3.3]].forEach(([px, pz]) => {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.85, 0.04), rackMat);
+      post.position.set(px, 1.4, pz);
+      truck.add(post);
+    });
+
     for (let sh = 0; sh < 3; sh++) {
-      const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.03, 3.2), rackMat);
-      shelf.position.set(-0.95, 0.9 + sh * 0.55, 1.8);
+      const shelfY = 0.88 + sh * 0.56;
+      const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.035, 3.25), rackMat);
+      shelf.position.set(-0.95, shelfY, 1.8);
       truck.add(shelf);
 
-      // Các hộp thuốc bảo quản sinh học Nexus trên kệ
+      // Các hộp thuốc chuyên dụng Nexus Biopharma (có nắp xanh, chốt khóa kim loại, chữ thập đỏ & khay ống huyết thanh)
       for (let kb = 0; kb < 3; kb++) {
-        const medBox = new THREE.Mesh(
-          new THREE.BoxGeometry(0.35, 0.22, 0.35),
-          new THREE.MeshStandardMaterial({ color: 0xf5f8fa, roughness: 0.5 })
-        );
-        medBox.position.set(-0.95, 1.05 + sh * 0.55, 0.8 + kb * 0.85);
-        truck.add(medBox);
+        const boxZ = 0.75 + kb * 0.92;
+        const medGroup = new THREE.Group();
+        medGroup.position.set(-0.94, shelfY + 0.16, boxZ);
+        medGroup.rotation.y = (kb === 1 && sh === 1) ? 0.18 : -0.05;
+
+        // Thân hộp thuốc có nhãn NEXUS BIOPHARMA / SERUM H-04 / BIOHAZARD
+        const body = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.24, 0.44), medBoxMat);
+        medGroup.add(body);
+
+        // Nắp hộp bảo quản lạnh màu xanh đậm + tay xách y tế
+        const lid = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.045, 0.46), medLidMat);
+        lid.position.y = 0.135;
+        medGroup.add(lid);
+
+        const handle = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.035, 0.16), latchMat);
+        handle.position.set(0, 0.17, 0);
+        medGroup.add(handle);
+
+        // 2 Chốt gài kim loại mặt bên phải (hướng vào lòng thùng xe)
+        [-0.12, 0.12].forEach(lz => {
+          const latch = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.07, 0.04), latchMat);
+          latch.position.set(0.185, 0.06, lz);
+          medGroup.add(latch);
+        });
+
+        // Biểu tượng chữ thập y tế nổi trên mặt hộp
+        const crossH = new THREE.Mesh(new THREE.BoxGeometry(0.015, 0.03, 0.09), redCrossMat);
+        crossH.position.set(0.185, -0.02, 0);
+        const crossV = new THREE.Mesh(new THREE.BoxGeometry(0.015, 0.09, 0.03), redCrossMat);
+        crossV.position.set(0.185, -0.02, 0);
+        medGroup.add(crossH, crossV);
+
+        truck.add(medGroup);
+
+        // Đặt thêm các khay ống nghiệm thủy tinh chứa Huyết thanh H-04 phát sáng xen kẽ giữa các hộp thuốc
+        if (kb < 2) {
+          const rackTray = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.05, 0.32), rackMat);
+          rackTray.position.set(-0.92, shelfY + 0.04, boxZ + 0.46);
+          truck.add(rackTray);
+
+          for (let v = 0; v < 4; v++) {
+            const vial = new THREE.Mesh(
+              new THREE.CylinderGeometry(0.024, 0.024, 0.19, 8),
+              (v + sh) % 2 === 0 ? vialRedMat : vialCyanMat
+            );
+            vial.position.set(
+              -0.98 + (v % 2) * 0.11,
+              shelfY + 0.13,
+              boxZ + 0.39 + Math.floor(v / 2) * 0.12
+            );
+            truck.add(vial);
+
+            const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.027, 0.027, 0.03, 8), latchMat);
+            cap.position.set(vial.position.x, shelfY + 0.23, vial.position.z);
+            truck.add(cap);
+          }
+        }
       }
     }
 
-    // Thùng giữ nhiệt lạnh y tế (Bio-Specimen Cold Storage Chest) bị đổ vỡ trên sàn xe
+    // Thùng giữ nhiệt lạnh y tế (Bio-Specimen Cold Storage Chest) bị bật nắp trên sàn xe, lộ các ống thuốc bên trong
     const cooler = new THREE.Mesh(
-      new THREE.BoxGeometry(0.8, 0.5, 0.6),
-      new THREE.MeshStandardMaterial({ color: 0x2255aa, roughness: 0.4 })
+      new THREE.BoxGeometry(0.82, 0.5, 0.62),
+      new THREE.MeshStandardMaterial({ color: 0x16468c, roughness: 0.35 })
     );
     cooler.position.set(0.3, 0.65, 1.5);
     cooler.rotation.y = 0.35;
     cooler.rotation.z = 0.25;
     truck.add(cooler);
+
+    // Các lọ thuốc huyết thanh lăn lóc trên sàn thùng xe quanh thùng lạnh
+    for (let sv = 0; sv < 6; sv++) {
+      const spilledVial = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.032, 0.032, 0.22, 8),
+        sv % 2 === 0 ? vialRedMat : vialCyanMat
+      );
+      spilledVial.rotation.z = Math.PI / 2;
+      spilledVial.rotation.y = sv * 0.7;
+      spilledVial.position.set(-0.1 + (sv % 3) * 0.28, 0.51, 1.2 + Math.floor(sv / 3) * 0.55);
+      truck.add(spilledVial);
+    }
 
     // Vũng dung dịch mẫu sinh học phát sáng mờ loang lổ trên sàn xe
     const bioPuddle = new THREE.Mesh(
@@ -1099,15 +1319,16 @@ export class HorrorWorld3D {
     bioPuddle.position.set(0.2, 0.49, 1.6);
     truck.add(bioPuddle);
 
-    // Kiện hàng carton Nexus trên sàn xe và rơi vãi ra ngoài
-    const boxMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.85 });
+    // Kiện hàng carton dược phẩm Nexus có tem nhãn vận đơn trên sàn xe và rơi vãi ra ngoài
+    const boxMat = new THREE.MeshStandardMaterial({
+      map: this.textures.nexusCarton,
+      roughness: 0.8
+    });
     for (let b = 0; b < 7; b++) {
       const box = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.42, 0.48), boxMat);
       if (b < 3) {
-        // Bên trong thùng xe
         box.position.set(0.1 + (b % 2) * 0.45, 0.65, 2.6 + b * 0.45);
       } else {
-        // Rơi ra ngoài bãi cỏ/đường
         box.position.set(-0.9 + b * 0.42, 0.22, 4.9 + (b % 2) * 0.55);
       }
       box.rotation.y = b * 0.45;
@@ -1127,6 +1348,8 @@ export class HorrorWorld3D {
 
     this.scene.add(truck);
     this.crashedTruckMesh = truck;
+    // Đăng ký vật lý cho đầu xe tải & gốc cây (chừa phần đuôi xe để người chơi có thể tiến sát quan sát hộp thuốc)
+    this.addCollider(x - 1.3, x + 2.2, 0, 3.0, z - 3.4, z + 1.8, 'nexus_truck');
   }
 
   // CÂY THÔNG TỰ NHIÊN NHIỀU TẦNG CÀNH LÁ (MULTI-TIERED CONIFER TREE)
@@ -1153,6 +1376,8 @@ export class HorrorWorld3D {
     }
 
     this.scene.add(tree);
+    const r = 0.42 * scale;
+    this.addCollider(x - r, x + r, 0, 6.0, z - r, z + r, 'pine_tree');
   }
 
   buildCorpseTree(x, y, z) {
@@ -1809,6 +2034,10 @@ export class HorrorWorld3D {
     });
 
     this.scene.add(courtGroup);
+    // Đăng ký vật lý cho Cổng Sắt, Hàng Rào Mặt Tiền & Đài Phun Nước Máu (chừa cổng giữa x: -3.1..3.1 để đi qua)
+    this.addCollider(-46, -3.1, 0, 3.5, -46.35, -45.65, 'courtyard_fence_L');
+    this.addCollider(3.1, 46, 0, 3.5, -46.35, -45.65, 'courtyard_fence_R');
+    this.addCollider(-9.5, -4.1, 0, 2.2, -55.5, -50.1, 'blood_fountain');
   }
 
   buildMansionEntrance(x, y, z) {
@@ -1852,103 +2081,67 @@ export class HorrorWorld3D {
     });
 
     // =========================================================================
-    // 1. TÒA NHÀ TRUNG TÂM CÓ KHOẢNG MỞ ĐẠI SẢNH THẬT 100% (TRUE HOLLOW FOYER OPENING)
-    // Không bao giờ bị khối tường xám chắn ngang cửa chính!
+    // 1. DỰNG TOÀN BỘ VỎ TƯỜNG RỖNG & NỘI THẤT 3 TẦNG (1F, 2F, B1 BASEMENT)
+    // Theo đúng 3 bản vẽ mặt bằng trong thư mục picture & Kịch bản!
     // =========================================================================
-    // Khối hậu sảnh phía sau (từ z = -12.0 đến z = +6.0)
-    const centerRearBody = new THREE.Mesh(new THREE.BoxGeometry(30, 20, 18), stoneWallMat);
-    centerRearBody.position.set(0, 10, -3.0);
-    centerRearBody.castShadow = true;
-    centerRearBody.receiveShadow = true;
-    mansion.add(centerRearBody);
+    buildMansionInterior(this, mansion);
 
-    // Khối mặt tiền bên trái cửa chính (x: -15.0 đến -2.3, z: 6.0 đến 12.0)
-    const frontLeftWall = new THREE.Mesh(new THREE.BoxGeometry(12.7, 20, 6.0), stoneWallMat);
-    frontLeftWall.position.set(-8.65, 10, 9.0);
-    frontLeftWall.castShadow = true;
-    frontLeftWall.receiveShadow = true;
-    mansion.add(frontLeftWall);
-
-    // Khối mặt tiền bên phải cửa chính (x: +2.3 đến +15.0, z: 6.0 đến 12.0)
-    const frontRightWall = new THREE.Mesh(new THREE.BoxGeometry(12.7, 20, 6.0), stoneWallMat);
-    frontRightWall.position.set(8.65, 10, 9.0);
-    frontRightWall.castShadow = true;
-    frontRightWall.receiveShadow = true;
-    mansion.add(frontRightWall);
-
-    // Khối tường mặt tiền phía trên cổng vòm (x: -2.3 đến +2.3, y: 6.8 đến 20.0, z: 6.0 đến 12.0)
-    const frontUpperWall = new THREE.Mesh(new THREE.BoxGeometry(4.6, 13.2, 6.0), stoneWallMat);
-    frontUpperWall.position.set(0, 13.4, 9.0);
-    frontUpperWall.castShadow = true;
-    frontUpperWall.receiveShadow = true;
-    mansion.add(frontUpperWall);
-
-    // Phào chỉ đá cổ điển chạy ngang phân tầng (Cornices & Stringcourses)
-    [6.9, 13.8, 19.8].forEach(cy => {
-      const ledge = new THREE.Mesh(new THREE.BoxGeometry(30.6, 0.45, 24.6), stoneTrimMat);
-      ledge.position.set(0, cy, 0);
+    // Phào chỉ đá cổ điển chạy ngang phân tầng bên ngoài (Cornices & Stringcourses)
+    [7.06, 13.6].forEach(cy => {
+      const ledge = new THREE.Mesh(new THREE.BoxGeometry(48.8, 0.42, 36.8), stoneTrimMat);
+      ledge.position.set(0, cy, -6.0);
       mansion.add(ledge);
     });
 
     // Đá ốp góc tường cổ kính (Corner Quoins)
-    [-15.05, 15.05].forEach(qx => {
-      for (let qy = 1.0; qy < 19.5; qy += 1.6) {
+    [-24.05, 24.05].forEach(qx => {
+      for (let qy = 1.0; qy < 13.5; qy += 1.6) {
         const quoin = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.9, 0.65), stoneTrimMat);
         quoin.position.set(qx, qy, 12.0);
         mansion.add(quoin);
       }
     });
 
-    // Mái ngói Slate Mansard dốc đứng tòa trung tâm
-    const centerRoof = new THREE.Mesh(new THREE.ConeGeometry(19, 10, 4), roofMat);
-    centerRoof.position.set(0, 24.5, 0);
+    // Mái ngói Slate Mansard dốc đứng tòa trung tâm & hai cánh
+    const centerRoof = new THREE.Mesh(new THREE.ConeGeometry(22, 9.5, 4), roofMat);
+    centerRoof.position.set(0, 18.4, -6.0);
     centerRoof.rotation.y = Math.PI / 4;
     mansion.add(centerRoof);
 
-    // THÁP CHUÔNG GOTHIC CAO VÚT Ở TRUNG TÂM (Tower Spire - Vút lên 36m)
-    const spireTower = new THREE.Mesh(new THREE.BoxGeometry(6.5, 12, 6.5), stoneWallMat);
-    spireTower.position.set(0, 25, 2.0);
+    // THÁP CHUÔNG GOTHIC CAO VÚT Ở TRUNG TÂM
+    const spireTower = new THREE.Mesh(new THREE.BoxGeometry(6.5, 11, 6.5), stoneWallMat);
+    spireTower.position.set(0, 20.5, 2.0);
     mansion.add(spireTower);
 
-    const spireCone = new THREE.Mesh(new THREE.ConeGeometry(4.4, 14, 8), roofMat);
-    spireCone.position.set(0, 36, 2.0);
+    const spireCone = new THREE.Mesh(new THREE.ConeGeometry(4.4, 13, 8), roofMat);
+    spireCone.position.set(0, 31.5, 2.0);
     mansion.add(spireCone);
 
     const vane = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 3.5), ironMat);
-    vane.position.set(0, 43, 2.0);
+    vane.position.set(0, 38.5, 2.0);
     mansion.add(vane);
 
     // ========================================================
-    // 2. GIAN CÁNH TRÁI & CÁNH PHẢI (WEST & EAST WINGS + TURRETS)
+    // 2. MÁI CÁNH TÂY & CÁNH ĐÔNG CÙNG THÁP CANH GÓC (TURRETS)
     // ========================================================
-    [-22, 22].forEach((wx, wIdx) => {
-      const wing = new THREE.Mesh(new THREE.BoxGeometry(18, 16, 20), stoneWallMat);
-      wing.position.set(wx, 8, 1);
-      wing.castShadow = true;
-      wing.receiveShadow = true;
-      mansion.add(wing);
-
-      const wingLedge = new THREE.Mesh(new THREE.BoxGeometry(18.5, 0.4, 20.5), stoneTrimMat);
-      wingLedge.position.set(wx, 15.8, 1);
-      mansion.add(wingLedge);
-
-      const wingRoof = new THREE.Mesh(new THREE.ConeGeometry(13, 8, 4), roofMat);
-      wingRoof.position.set(wx, 19.5, 1);
+    [-16, 16].forEach((wx, wIdx) => {
+      const wingRoof = new THREE.Mesh(new THREE.ConeGeometry(14, 7.5, 4), roofMat);
+      wingRoof.position.set(wx, 17.3, -6.0);
       wingRoof.rotation.y = Math.PI / 4;
       mansion.add(wingRoof);
 
-      const tx = wIdx === 0 ? -30 : 30;
-      const turret = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.6, 18, 8), stoneWallMat);
-      turret.position.set(tx, 9, 10);
+      const tx = wIdx === 0 ? -25.2 : 25.2;
+      const turret = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.6, 15, 8), stoneWallMat);
+      turret.position.set(tx, 7.5, 11.2);
       mansion.add(turret);
 
-      const turretCone = new THREE.Mesh(new THREE.ConeGeometry(3.1, 7.2, 8), roofMat);
-      turretCone.position.set(tx, 21, 10);
+      const turretCone = new THREE.Mesh(new THREE.ConeGeometry(3.1, 6.8, 8), roofMat);
+      turretCone.position.set(tx, 18.2, 11.2);
       mansion.add(turretCone);
     });
 
     // 4 Ống khói gạch cao kiểu Victoria trên mái nhà
-    [[-10, 24, -5], [10, 24, -5], [-24, 20, 2], [24, 20, 2]].forEach(([cx, cy, cz]) => {
+    [[-10, 19, -5], [10, 19, -5], [-20, 18, 2], [20, 18, 2]].forEach(([cx, cy, cz]) => {
       const chimney = new THREE.Mesh(new THREE.BoxGeometry(1.4, 5.5, 1.4), stoneWallMat);
       chimney.position.set(cx, cy, cz);
       mansion.add(chimney);
@@ -1958,13 +2151,11 @@ export class HorrorWorld3D {
     // 3. BỆ HIÊN NHÀ THẤP CHÂN THỰC (CHỈ CAO 0.26M - DƯỚI ĐẦU GỐI NGƯỜI CHƠI!)
     // Và 2 bậc tam cấp thấp giúp người chơi bước lên hiên nhà cực kỳ tự nhiên!
     // =========================================================================
-    // Sàn hiên đá (Cao đúng 0.26m thay vì 1.4m như cũ!)
     const terrace = new THREE.Mesh(new THREE.BoxGeometry(22, 0.26, 6.6), stoneTrimMat);
     terrace.position.set(0, 0.13, 15.1); // Trải từ z = 11.8 đến z = 18.4 (world z = -63.2 đến -56.6)
     terrace.receiveShadow = true;
     mansion.add(terrace);
 
-    // 2 Bậc thềm đá thấp nằm phía trước sàn hiên (không bị lọt vào trong khối hiên)
     const stepUpper = new THREE.Mesh(new THREE.BoxGeometry(10.5, 0.18, 0.55), stoneTrimMat);
     stepUpper.position.set(0, 0.09, 18.68); // World z = -56.32, cao 18cm
     stepUpper.receiveShadow = true;
@@ -1981,7 +2172,6 @@ export class HorrorWorld3D {
       sideRail.position.set(bx, 0.26 + 0.475, 15.1);
       mansion.add(sideRail);
 
-      // Trụ đá canh hiên kèm tượng Gargoyle cổ
       const pedestal = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.25, 1.1), stoneTrimMat);
       pedestal.position.set(bx, 0.26 + 0.625, 18.0);
       mansion.add(pedestal);
@@ -2018,99 +2208,31 @@ export class HorrorWorld3D {
     mansion.add(pediment);
 
     // =========================================================================
-    // 4. CỔNG VÒM ĐÁ GOTHIC MỞ THÔNG & CỬA ĐÔI GỖ LIM CHẠM KHẮC (GRAND GOTHIC PORTAL)
+    // 4. CỔNG VÒM ĐÁ GOTHIC MỞ THÔNG & CỬA ĐÔI GỖ LIM CHẠM KHẮC (MỞ ĐỂ ĐI VÀO ĐẠI SẢNH)
     // =========================================================================
     const portalGroup = new THREE.Group();
-    portalGroup.position.set(0, 0.26, 12.0); // Đặt chuẩn trên mặt sàn hiên y = 0.26m!
+    portalGroup.position.set(0, 0.26, 12.0); // Đặt chuẩn trên mặt sàn hiên y = 0.26m
 
-    // A. HAI TRỤ ĐÁ VÒM CỬA HAI BÊN (KHÔNG CHẮN GIỮA LỐI ĐI!)
     [-2.55, 2.55].forEach(jx => {
-      const jambPillar = new THREE.Mesh(new THREE.BoxGeometry(0.85, 6.8, 0.95), stoneTrimMat);
-      jambPillar.position.set(jx, 3.4, 0.25);
+      const jambPillar = new THREE.Mesh(new THREE.BoxGeometry(0.85, 5.2, 0.95), stoneTrimMat);
+      jambPillar.position.set(jx, 2.6, 0.25);
       portalGroup.add(jambPillar);
 
-      // Các cột tròn thanh mảnh chạm nổi hai bên cổng vòm (Clustered Colonnettes)
       [-0.28, 0.28].forEach(offset => {
-        const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 6.4, 10), stoneTrimMat);
-        shaft.position.set(jx + offset, 3.3, 0.68);
+        const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 5.0, 10), stoneTrimMat);
+        shaft.position.set(jx + offset, 2.5, 0.68);
         portalGroup.add(shaft);
       });
     });
 
-    // B. TRÁN VÒM ĐÁ GOTHIC PHÍA TRÊN CỬA (ARCH LINTEL & TYMPANUM TRÊN CAO Y = 6.5M)
-    const archLintel = new THREE.Mesh(new THREE.BoxGeometry(6.2, 0.85, 1.05), stoneTrimMat);
-    archLintel.position.set(0, 6.65, 0.32);
+    const archLintel = new THREE.Mesh(new THREE.BoxGeometry(6.2, 0.75, 1.05), stoneTrimMat);
+    archLintel.position.set(0, 5.35, 0.32);
     portalGroup.add(archLintel);
 
-    const tympanum = new THREE.Mesh(
-      new THREE.CylinderGeometry(2.35, 2.35, 0.75, 16, 1, false, 0, Math.PI),
-      stoneTrimMat
-    );
-    tympanum.rotation.z = Math.PI / 2;
-    tympanum.rotation.y = Math.PI / 2;
-    tympanum.position.set(0, 6.95, 0.35);
-    portalGroup.add(tympanum);
-
-    // Phù điêu Đầu Lâu & Huyết Quỷ ở tâm trán vòm trên cao
-    const reliefCrest = new THREE.Mesh(
-      new THREE.DodecahedronGeometry(0.48, 1),
-      new THREE.MeshStandardMaterial({ color: 0x4a1215, roughness: 0.7 })
-    );
-    reliefCrest.position.set(0, 7.65, 0.78);
-    portalGroup.add(reliefCrest);
-
-    // C. KHÔNG GIAN ĐẠI SẢNH BÊN TRONG BIỆT THỰ (INTERIOR FOYER VISIBLE THROUGH AJAR DOOR)
-    const foyerGroup = new THREE.Group();
-    foyerGroup.position.set(0, 0.01, 0);
-
-    // Sàn đá cẩm thạch đen bóng bên trong đại sảnh
-    const foyerFloor = new THREE.Mesh(
-      new THREE.PlaneGeometry(4.6, 6.2),
-      new THREE.MeshStandardMaterial({ color: 0x100e14, roughness: 0.35, metalness: 0.25 })
-    );
-    foyerFloor.rotation.x = -Math.PI / 2;
-    foyerFloor.position.set(0, 0.01, -3.0);
-    foyerGroup.add(foyerFloor);
-
-    // Thảm nhung đỏ thẫm hoàng gia trải từ bậc cửa dẫn sâu vào đại sảnh
-    const redCarpet = new THREE.Mesh(
-      new THREE.PlaneGeometry(2.3, 6.8),
-      new THREE.MeshStandardMaterial({ color: 0x68050d, roughness: 0.85 })
-    );
-    redCarpet.rotation.x = -Math.PI / 2;
-    redCarpet.position.set(0, 0.02, -2.6);
-    foyerGroup.add(redCarpet);
-
-    // Tường gỗ lim ốp hai bên đại sảnh
-    [-2.25, 2.25].forEach(fwx => {
-      const foyerWall = new THREE.Mesh(
-        new THREE.BoxGeometry(0.18, 6.6, 6.0),
-        new THREE.MeshStandardMaterial({ color: 0x1c0f08, roughness: 0.8 })
-      );
-      foyerWall.position.set(fwx, 3.3, -3.0);
-      foyerGroup.add(foyerWall);
-    });
-
-    // Trần đại sảnh & Đèn chùm nến Gothic tỏa ánh sáng vàng cam ấm áp lẫn ma mị ra cửa
-    const foyerCeiling = new THREE.Mesh(
-      new THREE.BoxGeometry(4.6, 0.2, 6.0),
-      new THREE.MeshStandardMaterial({ color: 0x140b07 })
-    );
-    foyerCeiling.position.set(0, 6.5, -3.0);
-    foyerGroup.add(foyerCeiling);
-
-    const interiorChandelier = new THREE.PointLight(0xff8822, 5.2, 16, 1.2);
-    interiorChandelier.position.set(0.4, 4.6, -2.2);
-    foyerGroup.add(interiorChandelier);
-
-    // Đèn nến lập lòe ngay ngưỡng cửa giúp cánh cửa gỗ lim luôn nổi bật rõ nét trong đêm
-    const portalThresholdLight = new THREE.PointLight(0xff9933, 3.6, 11, 1.3);
+    const portalThresholdLight = new THREE.PointLight(0xff9933, 3.8, 12, 1.3);
     portalThresholdLight.position.set(0, 3.8, 1.8);
     portalGroup.add(portalThresholdLight);
 
-    portalGroup.add(foyerGroup);
-
-    // D. HAI CÁNH CỬA ĐÔI GỖ LIM CỔ KÍNH CHẠM KHẮC TINH XẢO (GRAND CARVED DOUBLE DOORS)
     const doorMat = new THREE.MeshStandardMaterial({
       map: this.textures.doorWood,
       roughness: 0.58,
@@ -2122,47 +2244,27 @@ export class HorrorWorld3D {
       roughness: 0.25
     });
 
-    // 1) Cánh cửa bên trái (Đóng, rộng 2.15m, cao 6.2m, nằm nổi phía trước ở z = 0.22)
-    const doorLGroup = new THREE.Group();
-    doorLGroup.position.set(-1.08, 3.1, 0.22);
-
-    const doorLMesh = new THREE.Mesh(new THREE.BoxGeometry(2.14, 6.2, 0.22), doorMat);
-    doorLMesh.castShadow = true;
-    doorLMesh.receiveShadow = true;
-    doorLGroup.add(doorLMesh);
-
-    // Khung phào chỉ gỗ nổi 3D và Tay nắm sư tử bằng đồng trên cánh trái
+    // Hai cánh cửa đôi gỗ lim mở rộng vào phía trong để người chơi bước thẳng vào Đại Sảnh Tầng 1!
+    const doorLHinge = new THREE.Group();
+    doorLHinge.position.set(-2.15, 2.5, 0.12);
+    doorLHinge.rotation.y = 1.15; // Mở vào trong bên trái
+    const doorLMesh = new THREE.Mesh(new THREE.BoxGeometry(2.1, 5.0, 0.2), doorMat);
+    doorLMesh.position.set(1.05, 0, 0);
+    doorLHinge.add(doorLMesh);
     const knockerRingL = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.035, 10, 20), brassMat);
-    knockerRingL.position.set(0.72, -0.45, 0.14);
-    doorLGroup.add(knockerRingL);
+    knockerRingL.position.set(1.72, -0.35, 0.14);
+    doorLHinge.add(knockerRingL);
+    portalGroup.add(doorLHinge);
 
-    const knockerPlateL = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.04, 12), brassMat);
-    knockerPlateL.rotation.x = Math.PI / 2;
-    knockerPlateL.position.set(0.72, -0.28, 0.12);
-    doorLGroup.add(knockerPlateL);
-
-    portalGroup.add(doorLGroup);
-
-    // 2) Cánh cửa bên phải (MỞ HÉ 38 ĐỘ VÀO TRONG SẢNH ĐỂ LỘ ÁNH ĐÈN & THẢM ĐỎ)
     const doorRHinge = new THREE.Group();
-    doorRHinge.position.set(2.15, 3.1, 0.22); // Bản lề gắn ở mép phải (x = 2.15)
-    doorRHinge.rotation.y = -0.66; // Xoay mở 38 độ vào trong đại sảnh
-
-    const doorRMesh = new THREE.Mesh(new THREE.BoxGeometry(2.14, 6.2, 0.22), doorMat);
-    doorRMesh.position.set(-1.07, 0, 0);
-    doorRMesh.castShadow = true;
-    doorRMesh.receiveShadow = true;
+    doorRHinge.position.set(2.15, 2.5, 0.12);
+    doorRHinge.rotation.y = -1.25; // Mở rộng vào trong bên phải
+    const doorRMesh = new THREE.Mesh(new THREE.BoxGeometry(2.1, 5.0, 0.2), doorMat);
+    doorRMesh.position.set(-1.05, 0, 0);
     doorRHinge.add(doorRMesh);
-
     const knockerRingR = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.035, 10, 20), brassMat);
-    knockerRingR.position.set(-1.78, -0.45, 0.14);
+    knockerRingR.position.set(-1.72, -0.35, 0.14);
     doorRHinge.add(knockerRingR);
-
-    const knockerPlateR = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.04, 12), brassMat);
-    knockerPlateR.rotation.x = Math.PI / 2;
-    knockerPlateR.position.set(-1.78, -0.28, 0.12);
-    doorRHinge.add(knockerPlateR);
-
     portalGroup.add(doorRHinge);
 
     // 2 Đèn lồng sắt rèn kiểu Victoria treo hai bên cổng vòm chính
@@ -2186,42 +2288,42 @@ export class HorrorWorld3D {
     mansion.add(portalGroup);
 
     // =========================================================================
-    // 5. HỆ THỐNG CỬA SỔ CŨ NÁT, KÍNH VỠ & ĐÓNG VÁN GỖ CHÉO KINH DỊ (BOARDED DILAPIDATED WINDOWS)
+    // 5. HỆ THỐNG CỬA SỔ CŨ NÁT, KÍNH VỠ & ĐÓNG VÁN GỖ CHÉO KINH DỊ BÊN NGOÀI BIỆT THỰ
     // =========================================================================
     const windowPositions = [
-      // Tầng 1 - Mặt tiền (Sẽ được đóng ván gỗ mục bịt chéo & chớp cửa gãy!)
-      { pos: [-8.8, 3.8, 12.08], boarded: true },
-      { pos: [8.8, 3.8, 12.08], boarded: true },
-      { pos: [-18, 3.8, 11.08], boarded: true },
-      { pos: [-25, 3.8, 11.08], boarded: false },
-      { pos: [18, 3.8, 11.08], boarded: true },
-      { pos: [25, 3.8, 11.08], boarded: false },
-      // Tầng 2 - Mặt tiền
-      { pos: [-8.8, 11.8, 12.08], boarded: false },
-      { pos: [-3.8, 11.8, 12.08], boarded: true },
-      { pos: [3.8, 11.8, 12.08], boarded: false },
-      { pos: [8.8, 11.8, 12.08], boarded: false },
-      { pos: [-18, 11.2, 11.08], boarded: false },
-      { pos: [-25, 11.2, 11.08], boarded: true },
-      { pos: [18, 11.2, 11.08], boarded: false },
-      { pos: [25, 11.2, 11.08], boarded: false },
-      // Cửa sổ hông trái & phải
-      { pos: [-31.08, 7.2, 0], boarded: true },
-      { pos: [-31.08, 13.2, 0], boarded: false },
-      { pos: [31.08, 7.2, 0], boarded: true },
-      { pos: [31.08, 13.2, 0], boarded: false },
-      // Cửa sổ mặt sau
-      { pos: [-10, 8.2, -12.08], boarded: true },
-      { pos: [0, 8.2, -12.08], boarded: false },
-      { pos: [10, 8.2, -12.08], boarded: true }
+      // Tầng 1 - Mặt tiền (z = 12.26)
+      { pos: [-8.8, 3.6, 12.26], boarded: true },
+      { pos: [8.8, 3.6, 12.26], boarded: true },
+      { pos: [-16.5, 3.6, 12.26], boarded: true },
+      { pos: [-21.5, 3.6, 12.26], boarded: false },
+      { pos: [16.5, 3.6, 12.26], boarded: true },
+      { pos: [21.5, 3.6, 12.26], boarded: false },
+      // Tầng 2 - Mặt tiền (z = 12.26)
+      { pos: [-8.8, 10.2, 12.26], boarded: false },
+      { pos: [-3.8, 10.2, 12.26], boarded: true },
+      { pos: [3.8, 10.2, 12.26], boarded: false },
+      { pos: [8.8, 10.2, 12.26], boarded: false },
+      { pos: [-16.5, 10.2, 12.26], boarded: false },
+      { pos: [-21.5, 10.2, 12.26], boarded: true },
+      { pos: [16.5, 10.2, 12.26], boarded: false },
+      { pos: [21.5, 10.2, 12.26], boarded: false },
+      // Cửa sổ hông trái (x = -24.26) & phải (x = +24.26)
+      { pos: [-24.26, 3.6, -4], boarded: true },
+      { pos: [-24.26, 10.2, -4], boarded: false },
+      { pos: [24.26, 3.6, -4], boarded: true },
+      { pos: [24.26, 10.2, -4], boarded: false },
+      // Cửa sổ mặt sau (z = -24.26)
+      { pos: [-10, 3.6, -24.26], boarded: true },
+      { pos: [0, 10.2, -24.26], boarded: false },
+      { pos: [10, 3.6, -24.26], boarded: true }
     ];
 
     windowPositions.forEach(({ pos: [wx, wy, wz], boarded }, idx) => {
       const winGroup = new THREE.Group();
       winGroup.position.set(wx, wy, wz);
-      if (Math.abs(wx) > 30) {
+      if (Math.abs(wx) > 23.5) {
         winGroup.rotation.y = wx < 0 ? -Math.PI / 2 : Math.PI / 2;
-      } else if (wz < -10) {
+      } else if (wz < -20) {
         winGroup.rotation.y = Math.PI;
       }
 
@@ -2332,17 +2434,19 @@ export class HorrorWorld3D {
     this.mansionGroup = mansion;
   }
 
-  // DỰNG CON DAO GĂM TRÊN TAY NGƯỜI CHƠI (FPS KNIFE VIEWMODEL)
+  // =========================================================================
+  // DỰNG VŨ KHÍ & VẬT PHẨM TRÊN TAY GÓC NHÌN THỨ NHẤT (DAO GĂM, SÚNG LỤC 100 VIÊN, TẬP HỒ SƠ)
+  // =========================================================================
   buildFirstPersonKnife() {
+    // 1. DAO GĂM SINH TỒN (FPS KNIFE)
     this.fpsKnife = new THREE.Group();
     this.fpsKnife.position.set(0.32, -0.26, -0.52);
     this.fpsKnife.rotation.set(-0.25, 0.45, -0.35);
-    this.fpsKnife.visible = false; // Ẩn khi chưa nhặt dao
+    this.fpsKnife.visible = false;
 
     this.isSlashing = false;
     this.slashTimer = 0;
 
-    // Lưỡi dao thép sáng loáng
     const bladeMat = new THREE.MeshStandardMaterial({
       color: 0xf0f4f8,
       metalness: 0.95,
@@ -2352,92 +2456,401 @@ export class HorrorWorld3D {
     blade.position.set(0, 0.19, 0);
     this.fpsKnife.add(blade);
 
-    // Mũi dao nhọn vát sắc
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.035, 0.12, 4), bladeMat);
     tip.position.set(0, 0.44, 0);
     tip.rotation.y = Math.PI / 4;
     this.fpsKnife.add(tip);
 
-    // Răng cưa lưng dao
-    const toothMat = new THREE.MeshStandardMaterial({ color: 0xccd6e0, metalness: 0.9 });
-    for (let s = 0; s < 4; s++) {
-      const tooth = new THREE.Mesh(new THREE.ConeGeometry(0.012, 0.028, 4), toothMat);
-      tooth.position.set(0, 0.1 + s * 0.06, -0.04);
-      tooth.rotation.x = -Math.PI / 2;
-      this.fpsKnife.add(tooth);
-    }
-
-    // Chốt bảo vệ tay (Crossguard) bằng đồng
     const guardMat = new THREE.MeshStandardMaterial({ color: 0xc9933b, metalness: 0.8, roughness: 0.25 });
     const guard = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.025, 0.15), guardMat);
-    guard.position.set(0, 0.0, 0);
     this.fpsKnife.add(guard);
 
-    // Chuôi dao bọc da đen có rãnh bám
     const handleMat = new THREE.MeshStandardMaterial({ color: 0x16141a, roughness: 0.85 });
     const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.028, 0.2, 12), handleMat);
     handle.position.set(0, -0.1, 0);
     this.fpsKnife.add(handle);
 
-    // Chuôi đồng đáy
     const pommel = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.035, 12), guardMat);
     pommel.position.set(0, -0.21, 0);
     this.fpsKnife.add(pommel);
-
-    // Gắn trực tiếp vào Camera để luôn hiển thị trước mắt người chơi
     this.camera.add(this.fpsKnife);
+
+    // 2. SÚNG LỤC CẢNH SÁT GLOCK 19 CHI TIẾT (FPS SERVICE PISTOL - 100 VIÊN ĐẠN)
+    this.fpsPistol = new THREE.Group();
+    this.fpsPistol.position.set(0.28, -0.24, -0.48);
+    this.fpsPistol.visible = false;
+    this.pistolRecoilTimer = 0;
+
+    const gunSlideMat = new THREE.MeshStandardMaterial({ color: 0x1e222a, metalness: 0.88, roughness: 0.24 });
+    const gunFrameMat = new THREE.MeshStandardMaterial({ color: 0x121418, metalness: 0.4, roughness: 0.7 });
+    const sightMat = new THREE.MeshBasicMaterial({ color: 0x33ff66 });
+
+    this.pistolSlideMesh = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.068, 0.34), gunSlideMat);
+    this.pistolSlideMesh.position.set(0, 0.04, -0.04);
+    this.fpsPistol.add(this.pistolSlideMesh);
+
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.36, 12), gunSlideMat);
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(0, 0.04, -0.06);
+    this.fpsPistol.add(barrel);
+
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.19, 0.085), gunFrameMat);
+    grip.position.set(0, -0.06, 0.06);
+    grip.rotation.x = 0.24;
+    this.fpsPistol.add(grip);
+
+    // Thước ngắm dạ quang Tritium xanh lá
+    const rearSightL = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.012, 0.01), sightMat);
+    rearSightL.position.set(-0.014, 0.08, 0.11);
+    const rearSightR = rearSightL.clone();
+    rearSightR.position.x = 0.014;
+    const frontSight = new THREE.Mesh(new THREE.BoxGeometry(0.008, 0.014, 0.012), sightMat);
+    frontSight.position.set(0, 0.08, -0.19);
+    this.fpsPistol.add(rearSightL, rearSightR, frontSight);
+
+    // Tia lửa đầu nòng & Đèn chớp Muzzle Flash khi bắn
+    this.muzzleFlashMesh = new THREE.Mesh(
+      new THREE.ConeGeometry(0.065, 0.22, 8),
+      new THREE.MeshBasicMaterial({ color: 0xffcc33, transparent: true, opacity: 0.9 })
+    );
+    this.muzzleFlashMesh.rotation.x = -Math.PI / 2;
+    this.muzzleFlashMesh.position.set(0, 0.04, -0.32);
+    this.muzzleFlashMesh.visible = false;
+    this.fpsPistol.add(this.muzzleFlashMesh);
+
+    this.muzzleFlashLight = new THREE.PointLight(0xffaa22, 0, 14);
+    this.muzzleFlashLight.position.set(0, 0.06, -0.35);
+    this.fpsPistol.add(this.muzzleFlashLight);
+
+    this.camera.add(this.fpsPistol);
+
+    // 3. TẬP HỒ SƠ VỤ ÁN CẦM TRÊN TAY (FPS CASE FILE CLIPBOARD)
+    this.fpsClipboard = new THREE.Group();
+    this.fpsClipboard.position.set(0.28, -0.25, -0.46);
+    this.fpsClipboard.rotation.set(0.35, -0.35, -0.1);
+    this.fpsClipboard.visible = false;
+
+    const boardMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.26, 0.34, 0.016),
+      new THREE.MeshStandardMaterial({ color: 0x6e4726, roughness: 0.75 })
+    );
+    const paperMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.23, 0.30, 0.02),
+      new THREE.MeshBasicMaterial({ color: 0xf6eedc })
+    );
+    paperMesh.position.z = 0.006;
+    const clipMetal = new THREE.Mesh(
+      new THREE.BoxGeometry(0.09, 0.035, 0.028),
+      new THREE.MeshStandardMaterial({ color: 0xc0c8d0, metalness: 0.85, roughness: 0.2 })
+    );
+    clipMetal.position.set(0, 0.15, 0.012);
+    this.fpsClipboard.add(boardMesh, paperMesh, clipMetal);
+    this.camera.add(this.fpsClipboard);
+
     this.scene.add(this.camera);
+  }
+
+  // DỰNG MÔ HÌNH 3D SĨ QUAN AN (THEO ẢNH NGƯỜI CHƠI GỬI, MẶC ĐỒ CẢNH SÁT) CHO GÓC NHÌN [U]
+  buildThirdPersonAvatar() {
+    this.playerAvatar = createOfficerAn3DCharacter();
+    this.playerAvatar.visible = false; // Mặc định góc nhìn thứ nhất sẽ ẩn thân, bấm [U] sẽ hiện rõ
+    this.scene.add(this.playerAvatar);
+  }
+
+  // ĐỒNG BỘ VẬT PHẨM ĐANG CẦM TRÊN TAY VỚI Ô ĐANG CHỌN TRONG TÚI ĐỒ [1-9]
+  syncEquippedViewmodels() {
+    const activeItem = playerInventory.getActiveItem();
+    this.hasKnife = playerInventory.hasItem('combat_knife');
+    const isFirstPerson = this.cameraViewMode === 'first-person';
+
+    const holdingPistol = !!(activeItem && (activeItem.id === 'pistol' || activeItem.id === 'service_pistol'));
+    const holdingKnife = !!(activeItem && (activeItem.id === 'combat_knife' || activeItem.id === 'knife'));
+    const holdingDoc = !!(activeItem && (activeItem.id === 'case_file' || activeItem.isDocument || activeItem.type === 'document'));
+
+    if (this.fpsPistol) this.fpsPistol.visible = isFirstPerson && holdingPistol;
+    if (this.fpsKnife) this.fpsKnife.visible = isFirstPerson && holdingKnife;
+    if (this.fpsClipboard) this.fpsClipboard.visible = isFirstPerson && holdingDoc;
+
+    if (this.playerAvatar && this.playerAvatar.setHeldItem) {
+      this.playerAvatar.setHeldItem(activeItem ? activeItem.id : null);
+    }
+
+    if (this.slotKnifeEl) {
+      if (holdingPistol) {
+        this.slotKnifeEl.textContent = `⚜ 🔫 SÚNG LỤC (${playerInventory.pistolAmmo}/${playerInventory.maxPistolAmmo} VIÊN) [CLICK: BẮN | Q: NÉM]`;
+        this.slotKnifeEl.classList.add('active');
+      } else if (holdingDoc) {
+        this.slotKnifeEl.textContent = `⚜ 📋 ${activeItem.name} [CLICK/E: ĐỌC | Q: NÉM]`;
+        this.slotKnifeEl.classList.add('active');
+      } else if (holdingKnife) {
+        this.slotKnifeEl.textContent = `⚜ 🗡 DAO GĂM SINH TỒN [CLICK: CHÉM | Q: NÉM]`;
+        this.slotKnifeEl.classList.add('active');
+      } else if (activeItem) {
+        this.slotKnifeEl.textContent = `⚜ 🎒 ĐANG CẦM: ${activeItem.name} [Q: NÉM]`;
+        this.slotKnifeEl.classList.add('active');
+      } else {
+        this.slotKnifeEl.textContent = `⚜ ✋ TAY KHÔNG [BẤM G MỞ TÚI ĐỒ • 1-9 CHỌN Ô]`;
+        this.slotKnifeEl.classList.remove('active');
+      }
+    }
+  }
+
+  // ĐỔI GÓC NHÌN NHÂN VẬT BẰNG PHÍM [U] GIỐNG MINECRAFT (THỨ NHẤT -> SAU LƯNG -> TRƯỚC MẶT)
+  cycleCameraViewMode() {
+    const modes = ['first-person', 'third-person-back', 'third-person-front'];
+    const idx = (modes.indexOf(this.cameraViewMode) + 1) % modes.length;
+    this.cameraViewMode = modes[idx];
+    audioManager.playClick();
+
+    const viewPill = this.uiContainer.querySelector('#fp-view-pill');
+    if (this.cameraViewMode === 'first-person') {
+      if (this.playerAvatar) this.playerAvatar.visible = false;
+      if (viewPill) viewPill.textContent = '🎥 GÓC NHÌN: THỨ NHẤT [U]';
+      this.showMonologue('🎥 Góc nhìn thứ nhất (First-Person View)', 2500);
+    } else if (this.cameraViewMode === 'third-person-back') {
+      if (this.playerAvatar) this.playerAvatar.visible = true;
+      if (viewPill) viewPill.textContent = '🎥 GÓC NHÌN: SAU LƯNG [U]';
+      this.showMonologue('🎥 Góc nhìn thứ ba sau lưng Sĩ quan An (Bấm [U] lần nữa để nhìn chính diện khuôn mặt)', 3500);
+    } else {
+      if (this.playerAvatar) this.playerAvatar.visible = true;
+      if (viewPill) viewPill.textContent = '🎥 GÓC NHÌN: TRƯỚC MẶT [U]';
+      this.showMonologue('🎥 Góc nhìn chính diện Sĩ quan An — đồng phục cảnh sát & sơ mi cà vạt đen (Bấm [U] để về góc nhìn thứ nhất)', 3500);
+    }
+    this.syncEquippedViewmodels();
+  }
+
+  // HÀNH ĐỘNG BẮN SÚNG LỤC CẢNH SÁT (100 VIÊN ĐẠN, BẮN HẾT BÁO HẾT ĐẠN!)
+  shootPistol() {
+    if (playerInventory.pistolAmmo <= 0) {
+      audioManager.playEmptyGunClick();
+      this.showMonologue('⚠️ SÚNG LỤC ĐÃ HẾT ĐẠN! (0/100 viên) — Không thể bắn tiếp!', 3500);
+      return;
+    }
+
+    playerInventory.pistolAmmo -= 1;
+    playerInventory.renderUI();
+    this.syncEquippedViewmodels();
+
+    audioManager.playGunshot();
+    this.pistolRecoilTimer = 0.001;
+    if (this.muzzleFlashMesh) this.muzzleFlashMesh.visible = true;
+    if (this.muzzleFlashLight) this.muzzleFlashLight.intensity = 14.0;
+
+    // Bắn tia Raycast từ tâm ngắm để tạo tia lửa đạn găm vào tường/đồ vật
+    const aimDir = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(this.cameraRotation.pitch, this.cameraRotation.yaw, 0, 'YXZ'));
+    this.raycaster.set(this.playerPos, aimDir);
+    this.raycaster.far = 65;
+
+    const hits = this.raycaster.intersectObjects(this.scene.children, true);
+    for (const h of hits) {
+      // Bỏ qua chính nhân vật và vũ khí trên tay
+      let obj = h.object;
+      let ignore = false;
+      while (obj) {
+        if (obj === this.camera || obj === this.playerAvatar || obj === this.rainSystem) {
+          ignore = true;
+          break;
+        }
+        obj = obj.parent;
+      }
+      if (!ignore && h.distance > 0.5) {
+        const spark = new THREE.Mesh(
+          new THREE.SphereGeometry(0.08, 8, 8),
+          new THREE.MeshBasicMaterial({ color: 0xffcc44 })
+        );
+        spark.position.copy(h.point);
+        this.scene.add(spark);
+        this.bulletImpacts.push({ mesh: spark, timer: 0.35 });
+        break;
+      }
+    }
+
+    if (playerInventory.pistolAmmo === 0) {
+      this.showMonologue('⚠️ ĐÃ BẮN HẾT VIÊN ĐẠN CUỐI CÙNG! Súng lục đã hết đạn (0/100 viên)!', 5000);
+    }
+  }
+
+  // HÀNH ĐỘNG BẤM PHÍM [Q] NÉM ĐỒ ĐANG CẦM TRÊN TAY RA ĐẤT (CÓ VẬT LÝ RƠI & NHẶT LẠI ĐƯỢC BẰNG [E])
+  throwActiveItem() {
+    const dropped = playerInventory.dropActiveItem();
+    if (!dropped) {
+      this.showMonologue('🎒 Bạn đang để tay không — hãy chọn ô có vật phẩm [1-9] rồi bấm [Q] để ném!', 3200);
+      return;
+    }
+
+    audioManager.playKnifeSlash();
+    this.syncEquippedViewmodels();
+
+    // Tạo mô hình 3D đại diện cho vật phẩm vừa ném ra
+    const dropGroup = new THREE.Group();
+    let mesh;
+    if (dropped.id === 'pistol' || dropped.id === 'service_pistol') {
+      mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.18, 0.14, 0.32),
+        new THREE.MeshStandardMaterial({ color: 0x222832, metalness: 0.85, roughness: 0.25 })
+      );
+    } else if (dropped.id === 'combat_knife' || dropped.id === 'knife') {
+      mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.08, 0.06, 0.46),
+        new THREE.MeshStandardMaterial({ color: 0xd8e2ec, metalness: 0.9, roughness: 0.15 })
+      );
+    } else if (dropped.id === 'case_file' || dropped.isDocument || dropped.type === 'document') {
+      mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.36, 0.04, 0.48),
+        new THREE.MeshStandardMaterial({ color: 0xd8b888, roughness: 0.7 })
+      );
+    } else {
+      mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.1, 0.1, 0.35, 10),
+        new THREE.MeshBasicMaterial({ color: 0xff2255 })
+      );
+    }
+    dropGroup.add(mesh);
+
+    // Vòng sáng nhỏ dưới vật phẩm bị ném để dễ tìm lại trong đêm
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.22, 0.28, 16),
+      new THREE.MeshBasicMaterial({ color: 0x66ccff, side: THREE.DoubleSide })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = -0.05;
+    dropGroup.add(ring);
+
+    const forward = new THREE.Vector3(0, 0, -1).applyEuler(
+      new THREE.Euler(this.cameraRotation.pitch, this.cameraRotation.yaw, 0, 'YXZ')
+    );
+    dropGroup.position.copy(this.playerPos).addScaledVector(forward, 0.7);
+    this.scene.add(dropGroup);
+
+    const floorY = this.getGroundElevation(this.playerPos.x, this.playerPos.z, this.playerPos.y - 1.68) + 0.08;
+    const velocity = forward.clone().multiplyScalar(6.5);
+    velocity.y += 2.6;
+
+    const interactRecord = {
+      mesh: mesh,
+      label: `⚜ [E] Nhặt lại ${dropped.name}`,
+      distance: 3.6,
+      onInteract: () => {
+        if (playerInventory.addItem(dropped)) {
+          audioManager.playPickup();
+          this.scene.remove(dropGroup);
+          const idx = this.interactables.indexOf(interactRecord);
+          if (idx !== -1) this.interactables.splice(idx, 1);
+          this.syncEquippedViewmodels();
+          this.showMonologue(`🎒 Đã nhặt lại [${dropped.name}] vào túi đồ!`, 3500);
+        }
+      }
+    };
+    this.interactables.push(interactRecord);
+
+    this.thrownItems.push({
+      group: dropGroup,
+      velocity,
+      floorY,
+      landed: false
+    });
+
+    this.showMonologue(`💨 Đã ném [${dropped.name}] ra phía trước! (Lại gần bấm [E] nếu muốn nhặt lại)`, 4000);
   }
 
   // Hành động vung dao chém (Knife Slash Attack)
   slashKnife() {
-    if (!this.hasKnife || this.isSlashing) return;
+    if (this.isSlashing) return;
     this.isSlashing = true;
     this.slashTimer = 0;
     audioManager.playKnifeSlash();
   }
 
   setupInteractions() {
-    this.interactables = [
-      // 1. Kiểm tra Cabin & Thùng Xe Tải Nexus
+    // Giữ nguyên các điểm tương tác nội thất & manh mối C1-C5 đã được thêm từ buildMansionInterior()
+    const outdoorInteractables = [
+      // 0. Nhặt Súng Lục Cảnh Sát (100 viên) & Tập Hồ Sơ Vụ Án tại Xe Cảnh Sát (nếu chưa nhặt lúc ngồi trong xe)
+      {
+        pos: new THREE.Vector3(-2.4, 1.2, 2.6),
+        radius: 4.2,
+        prompt: () => {
+          const needGun = !playerInventory.hasItem('service_pistol');
+          const needFile = !playerInventory.hasItem('case_file');
+          if (needGun && needFile) return '⚜ [E] Nhặt Súng Lục Cảnh Sát (100 viên) & Cầm Tập Hồ Sơ Vụ Án lên đọc';
+          if (needGun) return '⚜ [E] Nhặt Súng Lục Cảnh Sát (100 viên đạn) bỏ vào túi đồ';
+          if (needFile) return '⚜ [E] Cầm Tập Hồ Sơ Vụ Án #NX-2026-884 lên đọc';
+          return null;
+        },
+        action: () => {
+          const needGun = !playerInventory.hasItem('service_pistol');
+          const needFile = !playerInventory.hasItem('case_file');
+          if (needGun) {
+            playerInventory.addItem({
+              id: 'service_pistol',
+              name: 'Súng Lục Cảnh Sát Glock 19',
+              type: 'weapon',
+              count: 1,
+              description: 'Súng ngắn trang bị tiêu chuẩn của Sĩ quan An. Băng đạn đặc biệt 100 viên (Click chuột trái để bắn, bấm Q để ném).'
+            });
+            if (this.cruiserPistolMesh) this.cruiserPistolMesh.visible = false;
+          }
+          if (needFile) {
+            playerInventory.addItem({
+              id: 'case_file',
+              name: 'Hồ Sơ Vụ Án #NX-2026-884',
+              type: 'document',
+              count: 1,
+              description: 'Tập hồ sơ điều tra mật về vụ mất tích xe tải dược phẩm Nexus và Biệt thự Ông Bình.',
+              documentData: HOSOSO_VU_AN_DEFAULT
+            });
+            if (this.cruiserCaseFileMesh) this.cruiserCaseFileMesh.visible = false;
+            playerInventory.openCaseFileModal(HOSOSO_VU_AN_DEFAULT);
+          } else {
+            audioManager.playPickup();
+          }
+          this.syncEquippedViewmodels();
+          this.showMonologue('🔫 Đã trang bị Súng Lục Cảnh Sát (100 viên đạn) & Hồ Sơ Vụ Án vào túi đồ! Bấm [G] để xem túi đồ.', 5500);
+        }
+      },
+      // 1. Kiểm tra Cabin & Các Hộp Thuốc Y Tế trong Thùng Xe Tải Nexus
       {
         pos: new THREE.Vector3(1.2, 1.4, -10.5),
         radius: 4.5,
-        prompt: "⚜ [E] Khảo sát hiện trường xe giao hàng Nexus gặp nạn",
+        prompt: "⚜ [E] Khảo sát các hộp thuốc Serum H-04 trong xe giao hàng Nexus",
         action: () => {
           this.hasInspectedTruck = true;
           audioManager.playClick();
-          this.showMonologue("An: 'Tài xế đã biến mất... Thùng xe Nexus mở toang, hàng hóa vương vãi và có vệt máu tươi kéo dài vào con đường mòn trong rừng!'", 6500);
+          this.showMonologue("An: 'Trên kệ xe chất đầy các hộp thuốc lạnh NEXUS BIOPHARMA — SERUM H-04 kèm cảnh báo độc성 sinh học cấp 4! Nhiều ống huyết thanh đã bị đập vỡ...'", 7000);
         }
       },
       // 2. Rút Dao Găm trên Thân Cây
       {
         pos: new THREE.Vector3(-2.0, 1.4, -29.2),
-        radius: 3.2,
-        prompt: () => this.hasKnife ? null : "⚜ [E] Rút cây dao găm sinh tồn",
+        radius: 3.4,
+        prompt: () => playerInventory.hasItem('combat_knife') ? null : "⚜ [E] Rút cây dao găm sinh tồn bỏ vào túi đồ",
         action: () => {
-          if (this.hasKnife) return;
+          if (playerInventory.hasItem('combat_knife')) return;
           this.hasKnife = true;
           audioManager.playPickup();
           if (this.knifeObject) this.knifeObject.visible = false;
-          if (this.fpsKnife) this.fpsKnife.visible = true; // HIỆN DAO TRÊN TAY NGƯỜI CHƠI!
-          this.slotKnifeEl.textContent = "⚜ 🗡 DAO GĂM TRÊN TAY [CLICK: CHÉM]";
-          this.slotKnifeEl.classList.add('active');
-          this.showMonologue("An: 'Một con dao đi rừng sắc bén dính máu. Mình có thể click chuột trái để vung dao tự vệ!'", 6500);
+          playerInventory.addItem({
+            id: 'combat_knife',
+            name: 'Dao Găm Sinh Tồn Bowie',
+            type: 'weapon',
+            count: 1,
+            description: 'Con dao đi rừng sắc bén rút từ gốc cây đại thụ. Nhấp chuột trái để vung dao tự vệ hoặc bấm [Q] để ném.'
+          });
+          this.syncEquippedViewmodels();
+          this.showMonologue("An: 'Đã cất Dao Găm Sinh Tồn vào túi đồ! Bấm phím số [1-9] để đổi qua lại giữa Súng Lục, Hồ Sơ và Dao Găm.'", 6500);
         }
       },
       // 3. Mở Băng Ghi Hình Máy Quay (VHS Player)
       {
         pos: new THREE.Vector3(-1.0, 0.8, -28.2),
-        radius: 3.2,
-        prompt: "⚜ [E] Mở xem đoạn băng ghi hình trong máy quay",
+        radius: 3.4,
+        prompt: "⚜ [E] Mở xem đoạn băng ghi hình trong máy quay Handycam",
         action: () => {
           this.isViewingVHS = true;
           document.exitPointerLock?.();
           new VHSPlayer(() => {
             this.isViewingVHS = false;
             this.hasWatchedVideo = true;
-            this.showMonologue("An: 'Trời đất ơi... Sinh vật bóng đen mắt đỏ đó... Nó vừa tha người qua cánh cổng sắt rỉ sét vào căn biệt thự bỏ hoang phía trước!'", 7500);
+            this.showMonologue("An: 'Trời đất ơi... Thực thể bóng đen với hai con mắt đỏ rực đó... Nó vừa lao vào Quyết rồi kéo xác vào căn biệt thự phía trước!'", 7500);
           });
         }
       },
@@ -2448,59 +2861,76 @@ export class HorrorWorld3D {
         prompt: "⚜ [E] Kiểm tra chiếc xe lăn gỉ sét & đóa hoa trắng kỳ dị",
         action: () => {
           audioManager.playClick();
-          this.showMonologue("An: 'Một chiếc xe lăn trẻ em gỉ sét bị bỏ lại giữa sân cỏ hoang... Cạnh bên là những bông hoa trắng muốt mọc lên từ vũng máu đỏ thẫm!'", 7000);
-        }
-      },
-      // 5. Bước vào Biệt Thự Huyết Quỷ
-      {
-        pos: new THREE.Vector3(0, 1.9, -62.8),
-        radius: 4.8,
-        prompt: "⚜ [E] Bước qua cánh cửa gỗ lim vào Đại Sảnh Biệt Thự",
-        action: () => {
-          this.completeChapter1();
+          this.showMonologue("An: 'Chiếc xe lăn của tiểu thư Linh Chi bị bỏ lại giữa sân cỏ hoang... Cạnh bên là những bông Hoa Phục Sinh trắng muốt mọc lên từ vũng máu!'", 7000);
         }
       }
     ];
-  }
 
-  completeChapter1() {
-    audioManager.playDramaticImpact();
-    document.exitPointerLock?.();
-    this.storyModalEl.style.display = 'flex';
-    this.modalTitleEl.textContent = "🩸 ĐÃ BƯỚC VÀO CĂN BIỆT THỰ HUYẾT QUỶ";
-    this.modalBodyEl.innerHTML = `
-      <p style="font-size: 1.35rem; color: #fff; margin-bottom: 12px;">
-        An hít một hơi thật sâu, bước lên bậc thềm đá thấp và lách qua cánh cửa gỗ lim chạm khắc cổ kính đang hé mở để tiến vào đại sảnh.
-      </p>
-      <p style="font-size: 1.35rem; color: #d1d5db; margin-bottom: 12px;">
-        Cánh cửa khép sầm lại sau lưng: <em>"RẦM!"</em>. Mùi máu tanh nồng bốc lên từ hành lang thảm đỏ tối đen. Tiếng kêu cứu thảm thiết của anh shipper Phúc vọng ra từ tầng hầm nghiên cứu của Bác sĩ Bình...
-      </p>
-      <div style="background: rgba(139, 0, 0, 0.3); border: 2px solid #ff2a2a; padding: 14px; margin: 15px 0;">
-        <h3 style="color: #ff2a2a; font-family: 'Press Start 2P', cursive; font-size: 0.9rem; margin-bottom: 8px;">
-          HOÀN THÀNH CHẶNG 1: CON ĐƯỜNG MÒN RỪNG CẤM
-        </h3>
-        <p style="color: #ffd166; font-size: 1.25rem;">
-          Bạn đã trải nghiệm trọn vẹn: Khảo sát hiện trường xe tải Nexus, xem đoạn băng ghi hình máy quay, nhặt dao găm tự vệ, vượt qua cổng sắt rỉ sét và bước vào Căn Biệt Thự Huyết Quỷ!
-        </p>
-      </div>
-    `;
-    this.modalBtnEl.textContent = "QUAY LẠI MENU CHÍNH";
-    this.modalBtnEl.onclick = () => {
-      this.destroy();
-      if (this.onReturnToMenu) this.onReturnToMenu();
-    };
+    this.interactables.push(...outdoorInteractables);
   }
 
   setupControls() {
     this.onKeyDown = (e) => {
+      // Nếu đang mở Hồ Sơ Vụ Án, bấm ESC hoặc E sẽ đóng Hồ Sơ
+      if (playerInventory.isReadingCaseFile) {
+        if (e.code === 'Escape' || e.code === 'KeyE') {
+          e.preventDefault();
+          playerInventory.closeCaseFileModal();
+          this.canvas.requestPointerLock?.();
+        }
+        return;
+      }
+
       if (e.code === 'Escape') {
         e.preventDefault();
+        // Nếu đang mở cửa sổ Túi đồ lớn (uiState === 2), ESC sẽ đóng túi đồ trước
+        if (playerInventory.uiState === 2) {
+          playerInventory.cycleInventoryState(); // 2 -> 0
+          this.canvas.requestPointerLock?.();
+          return;
+        }
         this.togglePauseMenu();
         return;
       }
 
       if (this.isPaused || this.isViewingVHS || (this.storyModalEl && this.storyModalEl.style.display === 'flex')) {
         return;
+      }
+
+      // Phím [G]: Chu trình 3 trạng thái Túi Đồ (Lần 1: Hiện 9 ô Hotbar -> Lần 2: Mở Túi đồ + Nhân vật An -> Lần 3: Ẩn hoàn toàn)
+      if (e.code === 'KeyG') {
+        e.preventDefault();
+        const newState = playerInventory.cycleInventoryState();
+        if (newState === 2) {
+          document.exitPointerLock?.();
+          this.keys = {};
+        } else if (newState === 0) {
+          this.canvas.requestPointerLock?.();
+        }
+        return;
+      }
+
+      // Phím [U]: Đổi góc nhìn nhân vật giống Minecraft (Thứ nhất -> Sau lưng -> Trước mặt)
+      if (e.code === 'KeyU') {
+        e.preventDefault();
+        this.cycleCameraViewMode();
+        return;
+      }
+
+      // Phím [Q]: Ném vật phẩm đang cầm trên tay ra phía trước
+      if (e.code === 'KeyQ' && !this.isFlying) {
+        e.preventDefault();
+        this.throwActiveItem();
+        return;
+      }
+
+      // Phím số [1 - 9]: Chọn nhanh 9 ô trong thanh Hotbar
+      if (e.code.startsWith('Digit')) {
+        const num = parseInt(e.code.replace('Digit', ''), 10);
+        if (num >= 1 && num <= 9) {
+          playerInventory.selectSlot(num - 1);
+          this.syncEquippedViewmodels();
+        }
       }
 
       this.keys[e.code] = true;
@@ -2517,8 +2947,6 @@ export class HorrorWorld3D {
           this.slotFlashlightEl.textContent = "⚜ 🔦 ĐÈN PIN [F: TẮT]";
         }
       }
-
-      // Tuyệt đối không cho bấm phím C đổi chế độ trong lúc chơi theo yêu cầu!
 
       if (e.code === 'Space') {
         const now = performance.now();
@@ -2550,7 +2978,18 @@ export class HorrorWorld3D {
 
       if (e.code === 'KeyE') {
         if (this.activeInteractable) {
-          this.activeInteractable.action();
+          if (this.activeInteractable.action) {
+            this.activeInteractable.action();
+          } else if (this.activeInteractable.onInteract) {
+            this.activeInteractable.onInteract();
+          }
+          return;
+        }
+        // Nếu không đứng gần vật thể nào mà trên tay đang cầm Tập Hồ Sơ / Tài liệu -> Mở đọc ngay!
+        const activeItem = playerInventory.getActiveItem();
+        if (activeItem && (activeItem.id === 'case_file' || activeItem.isDocument || activeItem.type === 'document')) {
+          document.exitPointerLock?.();
+          playerInventory.openCaseFileModal(activeItem.documentData || activeItem || HOSOSO_VU_AN_DEFAULT);
         }
       }
     };
@@ -2567,49 +3006,62 @@ export class HorrorWorld3D {
           this.isPaused = false;
         }
       } else {
-        // Khi người chơi nhấn ESC thoát khóa chuột -> Mở ngay Menu Tạm Dừng
-        if (this.hasLockedOnce && !this.isViewingVHS && (!this.storyModalEl || this.storyModalEl.style.display === 'none')) {
+        // Không tự bật Pause nếu người chơi đang mở Túi Đồ lớn (uiState === 2), đang đọc Hồ Sơ hoặc xem VHS
+        if (
+          this.hasLockedOnce &&
+          !this.isViewingVHS &&
+          playerInventory.uiState !== 2 &&
+          !playerInventory.isReadingCaseFile &&
+          (!this.storyModalEl || this.storyModalEl.style.display === 'none')
+        ) {
           this.togglePauseMenu(true);
         }
       }
     };
 
     this.onMouseMove = (e) => {
-      if (this.isPaused) return;
+      if (this.isPaused || playerInventory.uiState === 2 || playerInventory.isReadingCaseFile) return;
       if (document.pointerLockElement === this.canvas) {
         const sensitivity = 0.0022;
         this.cameraRotation.yaw -= e.movementX * sensitivity;
         this.cameraRotation.pitch -= e.movementY * sensitivity;
         this.cameraRotation.pitch = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, this.cameraRotation.pitch));
-
-        this.camera.rotation.order = 'YXZ';
-        this.camera.rotation.y = this.cameraRotation.yaw;
-        this.camera.rotation.x = this.cameraRotation.pitch;
       }
     };
 
-    this.onCanvasClick = (e) => {
-      if (this.isPaused || this.isViewingVHS) return;
+    this.onMouseDown = (e) => {
+      if (this.isPaused || this.isViewingVHS || playerInventory.uiState === 2 || playerInventory.isReadingCaseFile) return;
       if (document.pointerLockElement !== this.canvas) {
-        this.canvas.requestPointerLock();
-      } else {
-        // Nếu đã khóa chuột và click chuột trái -> Vung dao chém
-        if (e.button === 0 && this.hasKnife) {
+        this.canvas.requestPointerLock?.();
+        return;
+      }
+      if (e.button === 0) {
+        const activeItem = playerInventory.getActiveItem();
+        if (activeItem && (activeItem.id === 'pistol' || activeItem.id === 'service_pistol')) {
+          this.shootPistol();
+        } else if (activeItem && (activeItem.id === 'case_file' || activeItem.isDocument || activeItem.type === 'document')) {
+          document.exitPointerLock?.();
+          playerInventory.openCaseFileModal(activeItem.documentData || activeItem || HOSOSO_VU_AN_DEFAULT);
+        } else if (activeItem && (activeItem.id === 'combat_knife' || activeItem.id === 'knife')) {
           this.slashKnife();
         }
       }
+    };
+
+    this.onWheel = (e) => {
+      if (this.isPaused || playerInventory.uiState === 2 || playerInventory.isReadingCaseFile) return;
+      const dir = e.deltaY > 0 ? 1 : -1;
+      const nextSlot = (playerInventory.selectedSlot + dir + 9) % 9;
+      playerInventory.selectSlot(nextSlot);
+      this.syncEquippedViewmodels();
     };
 
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
     window.addEventListener('mousemove', this.onMouseMove);
-    this.canvas.addEventListener('click', this.onCanvasClick);
-    window.addEventListener('mousedown', (e) => {
-      if (!this.isPaused && document.pointerLockElement === this.canvas && e.button === 0 && this.hasKnife) {
-        this.slashKnife();
-      }
-    });
+    this.canvas.addEventListener('mousedown', this.onMouseDown);
+    window.addEventListener('wheel', this.onWheel);
 
     this.onResize = () => {
       this.camera.aspect = window.innerWidth / window.innerHeight;
@@ -2625,6 +3077,8 @@ export class HorrorWorld3D {
     window.removeEventListener('keyup', this.onKeyUp);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
     window.removeEventListener('mousemove', this.onMouseMove);
+    this.canvas.removeEventListener('mousedown', this.onMouseDown);
+    window.removeEventListener('wheel', this.onWheel);
     window.removeEventListener('resize', this.onResize);
     document.exitPointerLock?.();
     if (this.uiContainer && this.uiContainer.parentNode) {
@@ -2632,66 +3086,124 @@ export class HorrorWorld3D {
     }
   }
 
-  // Tính toán cao độ mặt đất tự nhiên và bệ hiên thấp 0.26m của Biệt Thự Huyết Quỷ
-  getGroundElevation(x, z) {
-    // Bệ hiên nhà rộng x: [-11.0, 11.0], cao đúng 0.26m (thấp dưới đầu gối, rất dễ bước lên!)
-    if (Math.abs(x) <= 11.0) {
-      if (z <= -56.6 && z >= -68.5) {
-        return 0.26;
+  // =========================================================================
+  // TÍNH TOÁN CAO ĐỘ MẶT SÀN 3 TẦNG BIỆT THỰ (1F: 0.26m | 2F: 7.06m | B1: -6.20m) & CẦU THANG
+  // =========================================================================
+  getGroundElevation(x, z, currentFeetY = 0) {
+    // 1. Bậc tam cấp và hiên trước Biệt Thự (x: -11..11, z: -63.0..-55.4)
+    if (Math.abs(x) <= 11.0 && z > -63.0 && z <= -55.4) {
+      if (z <= -56.6) return 0.26;
+      const t = (-55.4 - z) / (-56.6 - (-55.4));
+      return THREE.MathUtils.clamp(t, 0, 1) * 0.26;
+    }
+
+    // 2. Bên trong phạm vi Biệt Thự (x: -24.2..24.2, z: -99.2..-63.0)
+    // التọa độ Local so với tâm Biệt Thự (0, 0, -75): lx = x, lz = z + 75 (lz nằm trong [-24, +12])
+    if (Math.abs(x) <= 24.2 && z <= -62.8 && z >= -99.2) {
+      const lx = x;
+      const lz = z + 75.0;
+
+      // A. Cầu thang đôi Đại Sảnh (Grand Twin Staircases: nối Tầng 1 y=0.26 và Tầng 2 y=7.06)
+      // Nằm ở lx thuộc [-6.9, -4.1] hoặc [4.1, 6.9], lz từ +4.5 (y=0.26) đến -3.5 (y=7.06)
+      const onGrandStairX = (lx >= -6.9 && lx <= -4.1) || (lx >= 4.1 && lx <= 6.9);
+      if (onGrandStairX && lz <= 4.7 && lz >= -3.7 && currentFeetY > -1.2) {
+        const stairT = THREE.MathUtils.clamp((4.5 - lz) / (4.5 - (-3.5)), 0, 1);
+        return 0.26 + stairT * (7.06 - 0.26);
       }
-      if (z > -56.6 && z <= -55.4) {
-        // Bước mượt mà qua 2 bậc thềm thấp (từ z = -55.4 -> y = 0.0 lên z = -56.6 -> y = 0.26)
-        const t = (-55.4 - z) / (-56.6 - (-55.4));
-        return THREE.MathUtils.clamp(t, 0, 1) * 0.26;
+
+      // B. Cầu thang phụ B bên Cánh Tây (Service Stair B: nối Tầng 1 y=0.26 xuống Hầm B1 y=-6.20)
+      // Nằm ở lx thuộc [-16.0, -12.0], lz từ +2.0 (y=0.26) xuống -6.5 (y=-6.20)
+      const onBasementStairX = (lx >= -16.0 && lx <= -12.0);
+      if (onBasementStairX && lz <= 2.2 && lz >= -6.7 && currentFeetY < 3.5) {
+        const bStairT = THREE.MathUtils.clamp((2.0 - lz) / (2.0 - (-6.5)), 0, 1);
+        return 0.26 + bStairT * (-6.20 - 0.26);
+      }
+
+      // C. Xác định mặt sàn theo tầng hiện tại của người chơi
+      if (currentFeetY >= 4.6) {
+        return 7.06; // Đang ở trên Tầng 2 (2F)
+      }
+      if (currentFeetY <= -1.8) {
+        return -6.20; // Đang ở dưới Tầng Hầm (B1 Basement)
+      }
+      return 0.26; // Đang ở Tầng 1 (1F Ground Floor)
+    }
+
+    return 0.0; // Mặt đất rừng tự nhiên bên ngoài
+  }
+
+  // GIẢI QUYẾT VA CHẠM VẬT LÝ AABB (KHÔNG CHO ĐI XUYÊN TƯỜNG, ĐỒ VẬT, CÂY CỐI, XE CỘ)
+  resolveCollisions(pos, feetY, radius = 0.38) {
+    const pMinY = feetY + 0.25;
+    const pMaxY = feetY + 1.55;
+
+    for (let i = 0; i < this.colliders.length; i++) {
+      const box = this.colliders[i];
+      // Chỉ xét các vật cản có cùng độ cao tầng với người chơi
+      if (pMaxY <= box.minY || pMinY >= box.maxY) continue;
+
+      const expMinX = box.minX - radius;
+      const expMaxX = box.maxX + radius;
+      const expMinZ = box.minZ - radius;
+      const expMaxZ = box.maxZ + radius;
+
+      if (pos.x > expMinX && pos.x < expMaxX && pos.z > expMinZ && pos.z < expMaxZ) {
+        const penLeft = pos.x - expMinX;
+        const penRight = expMaxX - pos.x;
+        const penFront = pos.z - expMinZ;
+        const penBack = expMaxZ - pos.z;
+
+        const minPen = Math.min(penLeft, penRight, penFront, penBack);
+        if (minPen === penLeft) pos.x = expMinX;
+        else if (minPen === penRight) pos.x = expMaxX;
+        else if (minPen === penFront) pos.z = expMinZ;
+        else pos.z = expMaxZ;
       }
     }
-    return 0.0; // Mặt đất tự nhiên
   }
 
   updatePlayer(delta) {
-    if (this.isPaused) return;
-    const currentGroundY = this.getGroundElevation(this.camera.position.x, this.camera.position.z);
-    const naturalEyeY = currentGroundY + 1.68; // Chiều cao tầm mắt người chơi 1.68m (cao gấp 6.5 lần bệ hiên 0.26m!)
+    if (this.isPaused || playerInventory.uiState === 2 || playerInventory.isReadingCaseFile) return;
+
+    const currentFeetY = this.playerPos.y - 1.68;
+    const currentGroundY = this.getGroundElevation(this.playerPos.x, this.playerPos.z, currentFeetY);
+    const naturalEyeY = currentGroundY + 1.68;
+    let isMovingHorizontally = false;
+    const isRunning = this.keys['ShiftLeft'] || this.keys['ShiftRight'];
 
     if (this.isFlying) {
       // ==========================================
       // CHẾ ĐỘ BAY LƯỢN SÁNG TẠO (CREATIVE FLIGHT)
       // ==========================================
-      const forward = new THREE.Vector3();
-      this.camera.getWorldDirection(forward);
-      const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+      const forward = new THREE.Vector3(0, 0, -1).applyEuler(
+        new THREE.Euler(this.cameraRotation.pitch, this.cameraRotation.yaw, 0, 'YXZ')
+      );
+      const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.cameraRotation.yaw);
 
-      const flySpeed = (this.keys['ShiftLeft'] || this.keys['ShiftRight'] ? 22.0 : 12.0);
+      const flySpeed = isRunning ? 22.0 : 12.0;
       const flyMove = new THREE.Vector3();
 
       if (this.keys['KeyW'] || this.keys['ArrowUp']) flyMove.add(forward);
       if (this.keys['KeyS'] || this.keys['ArrowDown']) flyMove.sub(forward);
       if (this.keys['KeyD'] || this.keys['ArrowRight']) flyMove.add(right);
       if (this.keys['KeyA'] || this.keys['ArrowLeft']) flyMove.sub(right);
-
-      // Phím Space để bay lên cao
       if (this.keys['Space']) flyMove.y += 1.0;
-      // Phím Shift hoặc KeyQ để hạ độ cao xuống
-      if (this.keys['ShiftLeft'] || this.keys['ShiftRight'] || this.keys['KeyQ']) flyMove.y -= 1.0;
+      if (this.keys['ShiftLeft'] || this.keys['ShiftRight']) flyMove.y -= 1.0;
 
       if (flyMove.lengthSq() > 0) {
+        isMovingHorizontally = true;
         flyMove.normalize();
-        this.camera.position.addScaledVector(flyMove, flySpeed * delta);
+        this.playerPos.addScaledVector(flyMove, flySpeed * delta);
       }
-
-      // Giới hạn độ cao khi bay (không chìm xuống dưới sàn hiên)
-      this.camera.position.y = Math.max(naturalEyeY, Math.min(55, this.camera.position.y));
-
+      this.playerPos.y = Math.max(naturalEyeY, Math.min(55, this.playerPos.y));
     } else {
       // ==========================================
-      // DI CHUYỂN DƯỚI ĐẤT & NHẢY TRỌNG LỰC (GROUND & JUMP)
+      // DI CHUYỂN DƯỚI ĐẤT, LÊN XUỐNG CẦU THANG & VA CHẠM VẬT LÝ
       // ==========================================
       const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.cameraRotation.yaw);
       const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.cameraRotation.yaw);
 
-      const isRunning = this.keys['ShiftLeft'] || this.keys['ShiftRight'];
       const currentSpeed = isRunning ? this.moveSpeed * 1.65 : this.moveSpeed;
-
       const moveVector = new THREE.Vector3();
       if (this.keys['KeyW'] || this.keys['ArrowUp']) moveVector.add(forward);
       if (this.keys['KeyS'] || this.keys['ArrowDown']) moveVector.sub(forward);
@@ -2699,17 +3211,20 @@ export class HorrorWorld3D {
       if (this.keys['KeyA'] || this.keys['ArrowLeft']) moveVector.sub(right);
 
       if (moveVector.lengthSq() > 0) {
+        isMovingHorizontally = true;
         moveVector.normalize();
-        this.camera.position.addScaledVector(moveVector, currentSpeed * delta);
 
-        // Hiệu ứng nhấp nhô bước chân (chỉ khi chạm đất)
+        // Tách bước di chuyển X và Z kèm giải quyết va chạm AABB mượt mà
+        this.playerPos.x += moveVector.x * currentSpeed * delta;
+        this.resolveCollisions(this.playerPos, this.playerPos.y - 1.68);
+        this.playerPos.z += moveVector.z * currentSpeed * delta;
+        this.resolveCollisions(this.playerPos, this.playerPos.y - 1.68);
+
         if (this.isGrounded) {
           this.headBobTimer += delta * (isRunning ? 13 : 8.5);
-          this.camera.position.y = naturalEyeY + Math.sin(this.headBobTimer) * 0.055;
-
           this.stepTimer += delta;
           if (this.stepTimer > (isRunning ? 0.32 : 0.48)) {
-            if (currentGroundY > 0.5) {
+            if (Math.abs(currentGroundY) > 0.15) {
               audioManager.playClick();
             } else {
               audioManager.playFootstepMud();
@@ -2719,74 +3234,80 @@ export class HorrorWorld3D {
         }
       }
 
-      // Xử lý Trọng lực & Rơi tự do (Gravity)
-      this.verticalVelocity -= 18.0 * delta;
-      this.camera.position.y += this.verticalVelocity * delta;
+      // Cập nhật lại cao độ sàn sau khi bước lên/xuống bậc cầu thang
+      const updatedGroundY = this.getGroundElevation(this.playerPos.x, this.playerPos.z, this.playerPos.y - 1.68);
+      const targetEyeY = updatedGroundY + 1.68;
 
-      // Va chạm mặt sàn (Ground / Porch Floor Collision)
-      if (this.camera.position.y <= naturalEyeY) {
-        if (!this.isGrounded && this.verticalVelocity < -3.0) {
-          if (currentGroundY > 0.5) {
-            audioManager.playClick();
-          } else {
-            audioManager.playFootstepMud();
-          }
+      if (this.isGrounded && Math.abs(targetEyeY - this.playerPos.y) < 1.35) {
+        // Leo cầu thang mượt mà
+        this.playerPos.y = THREE.MathUtils.lerp(this.playerPos.y, targetEyeY, 0.45);
+      } else {
+        this.verticalVelocity -= 18.0 * delta;
+        this.playerPos.y += this.verticalVelocity * delta;
+        if (this.playerPos.y <= targetEyeY) {
+          this.playerPos.y = targetEyeY;
+          this.verticalVelocity = 0;
+          this.isGrounded = true;
         }
-        this.camera.position.y = naturalEyeY;
-        this.verticalVelocity = 0;
-        this.isGrounded = true;
       }
     }
 
-    // Giới hạn không gian di chuyển rộng lớn để người chơi có thể đi xung quanh cả trước, sau, trái, phải biệt thự!
-    this.camera.position.x = Math.max(-45, Math.min(45, this.camera.position.x));
-    this.camera.position.z = Math.max(-105, Math.min(12, this.camera.position.z));
+    // Giới hạn biên bản đồ rộng lớn
+    this.playerPos.x = Math.max(-45.5, Math.min(45.5, this.playerPos.x));
+    this.playerPos.z = Math.max(-105, Math.min(12, this.playerPos.z));
 
-    // Va chạm với các bức tường kiên cố của Biệt Thự (Mansion Wall Collisions - khi ở độ cao thấp)
-    if (this.camera.position.y < 16.0) {
-      // 1. Tòa nhà trung tâm (x: -15 to 15, z: -87 to -63)
-      // Thềm hiên cho phép người chơi đi đến z = -63.2. Cửa chính ở x: [-2.0, 2.0] cho phép bước vào đến z = -64.2!
-      const isAtDoorway = Math.abs(this.camera.position.x) <= 2.0;
-      const frontWallZ = isAtDoorway ? -64.2 : -63.2;
+    // ==========================================
+    // CẬP NHẬT VỊ TRÍ CAMERA THEO GÓC NHÌN [U] & NHÂN VẬT 3D SĨ QUAN AN
+    // ==========================================
+    const bobOffset = (this.isGrounded && isMovingHorizontally && !this.isFlying)
+      ? Math.sin(this.headBobTimer) * 0.048
+      : 0;
 
-      if (this.camera.position.x > -15 && this.camera.position.x < 15 &&
-          this.camera.position.z > -87 && this.camera.position.z < frontWallZ) {
-        const dNorth = Math.abs(this.camera.position.z - (-87));
-        const dSouth = Math.abs(this.camera.position.z - frontWallZ);
-        const dWest = Math.abs(this.camera.position.x - (-15));
-        const dEast = Math.abs(this.camera.position.x - 15);
-        const minD = Math.min(dNorth, dSouth, dWest, dEast);
-        if (minD === dSouth) this.camera.position.z = frontWallZ;
-        else if (minD === dNorth) this.camera.position.z = -87;
-        else if (minD === dWest) this.camera.position.x = -15;
-        else if (minD === dEast) this.camera.position.x = 15;
-      }
-
-      // 2. Cánh trái (x: -31 to -13, z: -85 to -65)
-      if (this.camera.position.x > -31 && this.camera.position.x < -13 &&
-          this.camera.position.z > -85 && this.camera.position.z < -65) {
-        if (this.camera.position.x < -22) this.camera.position.x = -31;
-        else if (this.camera.position.z > -75) this.camera.position.z = -65;
-        else this.camera.position.z = -85;
-      }
-
-      // 3. Cánh phải (x: 13 to 31, z: -85 to -65)
-      if (this.camera.position.x > 13 && this.camera.position.x < 31 &&
-          this.camera.position.z > -85 && this.camera.position.z < -65) {
-        if (this.camera.position.x > 22) this.camera.position.x = 31;
-        else if (this.camera.position.z > -75) this.camera.position.z = -65;
-        else this.camera.position.z = -85;
+    if (this.playerAvatar) {
+      this.playerAvatar.position.set(this.playerPos.x, this.playerPos.y - 1.68, this.playerPos.z);
+      // Hướng mặt nhân vật An theo hướng nhìn yaw (-Z là mặt trước của nhân vật)
+      this.playerAvatar.rotation.y = this.cameraRotation.yaw;
+      if (this.playerAvatar.updateAnimation) {
+        this.playerAvatar.updateAnimation(delta, isMovingHorizontally, isRunning, this.cameraRotation.pitch);
       }
     }
 
-    // Đèn pin di chuyển mượt mà có quán tính tay cầm
-    this.flashlight.position.copy(this.camera.position);
-    const targetDir = new THREE.Vector3(0, 0, -1).applyEuler(this.camera.rotation);
-    this.flashlightTargetPos.lerp(this.camera.position.clone().add(targetDir), 0.25);
+    if (this.cameraViewMode === 'first-person') {
+      this.camera.position.set(this.playerPos.x, this.playerPos.y + bobOffset, this.playerPos.z);
+      this.camera.rotation.order = 'YXZ';
+      this.camera.rotation.y = this.cameraRotation.yaw;
+      this.camera.rotation.x = this.cameraRotation.pitch;
+    } else if (this.cameraViewMode === 'third-person-back') {
+      // Camera lùi ra sau lưng Sĩ quan An 2.6m
+      const backDir = new THREE.Vector3(0, 0, 1).applyEuler(
+        new THREE.Euler(this.cameraRotation.pitch * 0.6, this.cameraRotation.yaw, 0, 'YXZ')
+      );
+      this.camera.position.copy(this.playerPos).addScaledVector(backDir, 2.55);
+      this.camera.position.y += 0.25;
+      this.camera.lookAt(this.playerPos.x, this.playerPos.y - 0.12, this.playerPos.z);
+    } else {
+      // 'third-person-front': Camera đứng phía trước mặt 2.25m nhìn thẳng vào khuôn mặt & đồng phục Sĩ quan An
+      const frontDir = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), this.cameraRotation.yaw);
+      this.camera.position.copy(this.playerPos).addScaledVector(frontDir, 2.25);
+      this.camera.position.y -= 0.08;
+      this.camera.lookAt(this.playerPos.x, this.playerPos.y - 0.16, this.playerPos.z);
+    }
+
+    // Đèn pin chiếu theo hướng nhìn của Sĩ quan An
+    this.flashlight.position.copy(this.playerPos);
+    const lookDir = new THREE.Vector3(0, 0, -1).applyEuler(
+      new THREE.Euler(this.cameraRotation.pitch, this.cameraRotation.yaw, 0, 'YXZ')
+    );
+    this.flashlightTargetPos.lerp(this.playerPos.clone().add(lookDir), 0.3);
     this.flashlightTarget.position.copy(this.flashlightTargetPos);
 
-    // CẬP NHẬT HOẠT ẢNH DAO TRÊN TAY (FPS KNIFE SWAY & SLASH ATTACK)
-    if (this.hasKnife && this.fpsKnife && this.fpsKnife.visible) {
+    // ==========================================
+    // CẬP NHẬT HOẠT ẢNH VŨ KHÍ GÓC NHÌN THỨ NHẤT (DAO, SÚNG LỤC, HỒ SƠ)
+    // ==========================================
+    const swayX = Math.cos(this.headBobTimer * 0.5) * 0.014;
+    const swayY = Math.sin(this.headBobTimer) * 0.016;
+
+    if (this.fpsKnife && this.fpsKnife.visible) {
       if (this.isSlashing) {
         this.slashTimer += delta * 7.5;
         if (this.slashTimer > Math.PI) {
@@ -2794,15 +3315,66 @@ export class HorrorWorld3D {
           this.slashTimer = 0;
         }
         const s = Math.sin(this.slashTimer);
-        // Vung dao chém chéo xuống phía trước
         this.fpsKnife.position.set(0.32 - s * 0.22, -0.26 - s * 0.15, -0.52 - s * 0.18);
         this.fpsKnife.rotation.set(-0.25 + s * 0.85, 0.45 - s * 1.2, -0.35 - s * 0.4);
       } else {
-        // Nhịp thở & Lắc lư khi bước chân đi bộ
-        const swayX = Math.cos(this.headBobTimer * 0.5) * 0.015;
-        const swayY = Math.sin(this.headBobTimer) * 0.018;
         this.fpsKnife.position.set(0.32 + swayX, -0.26 + swayY, -0.52);
         this.fpsKnife.rotation.set(-0.25, 0.45 + swayX * 2, -0.35);
+      }
+    }
+
+    if (this.fpsPistol && this.fpsPistol.visible) {
+      if (this.pistolRecoilTimer > 0) {
+        this.pistolRecoilTimer += delta * 12;
+        if (this.pistolRecoilTimer > 0.22) {
+          if (this.muzzleFlashMesh) this.muzzleFlashMesh.visible = false;
+          if (this.muzzleFlashLight) this.muzzleFlashLight.intensity = 0;
+        }
+        if (this.pistolRecoilTimer >= Math.PI) {
+          this.pistolRecoilTimer = 0;
+          if (this.pistolSlideMesh) this.pistolSlideMesh.position.z = -0.04;
+        } else {
+          const r = Math.sin(this.pistolRecoilTimer);
+          this.fpsPistol.position.set(0.28, -0.24 + r * 0.045, -0.48 + r * 0.08);
+          this.fpsPistol.rotation.set(r * 0.28, 0, 0);
+          if (this.pistolSlideMesh) this.pistolSlideMesh.position.z = -0.04 + r * 0.055;
+        }
+      } else {
+        this.fpsPistol.position.set(0.28 + swayX, -0.24 + swayY, -0.48);
+        this.fpsPistol.rotation.set(0, swayX * 1.2, 0);
+      }
+    }
+
+    if (this.fpsClipboard && this.fpsClipboard.visible) {
+      this.fpsClipboard.position.set(0.28 + swayX * 0.8, -0.25 + swayY * 0.8, -0.46);
+    }
+
+    // Cập nhật vật lý bay & rơi của các vật phẩm bị ném bằng phím [Q]
+    for (let i = 0; i < this.thrownItems.length; i++) {
+      const ti = this.thrownItems[i];
+      if (!ti.landed) {
+        ti.velocity.y -= 16.0 * delta;
+        ti.group.position.addScaledVector(ti.velocity, delta);
+        ti.group.rotation.x += delta * 6.0;
+        ti.group.rotation.y += delta * 4.5;
+        const groundAtItem = this.getGroundElevation(ti.group.position.x, ti.group.position.z, ti.group.position.y) + 0.08;
+        if (ti.group.position.y <= groundAtItem) {
+          ti.group.position.y = groundAtItem;
+          ti.group.rotation.set(0, ti.group.rotation.y, 0);
+          ti.landed = true;
+          audioManager.playFootstepMud();
+        }
+      }
+    }
+
+    // Cập nhật tia lửa đạn bắn trúng mục tiêu
+    for (let i = this.bulletImpacts.length - 1; i >= 0; i--) {
+      const imp = this.bulletImpacts[i];
+      imp.timer -= delta;
+      imp.mesh.scale.multiplyScalar(0.92);
+      if (imp.timer <= 0) {
+        this.scene.remove(imp.mesh);
+        this.bulletImpacts.splice(i, 1);
       }
     }
   }
@@ -2810,12 +3382,22 @@ export class HorrorWorld3D {
   checkInteractions() {
     this.activeInteractable = null;
     let closestDist = Infinity;
-    const playerPos = this.camera.position;
+    const playerPos = this.playerPos;
+    const tmpPos = new THREE.Vector3();
 
     for (let item of this.interactables) {
-      const dist = playerPos.distanceTo(item.pos);
-      if (dist < item.radius && dist < closestDist) {
-        const text = typeof item.prompt === 'function' ? item.prompt() : item.prompt;
+      let itemPos = item.pos;
+      const radius = item.radius || item.distance || 4.0;
+      if (!itemPos && item.mesh) {
+        item.mesh.getWorldPosition(tmpPos);
+        itemPos = tmpPos;
+      }
+      if (!itemPos) continue;
+
+      const dist = playerPos.distanceTo(itemPos);
+      if (dist < radius && dist < closestDist) {
+        const rawPrompt = item.prompt || item.label;
+        const text = typeof rawPrompt === 'function' ? rawPrompt() : rawPrompt;
         if (text) {
           closestDist = dist;
           this.activeInteractable = item;
