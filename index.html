@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BLOODFIEND - Huyết Quỷ | Pixel Horror Menu</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+  <!-- Màn hình Canvas vẽ Pixel Art hậu cảnh -->
+  <div id="game-container">
+    <canvas id="pixel-canvas"></canvas>
+
+    <!-- Hiệu ứng CRT, Scanlines & Vignette cổ điển -->
+    <div class="crt-overlay"></div>
+    <div class="vignette"></div>
+
+    <!-- Nút Bật/Tắt Âm Thanh U Ám -->
+    <button id="audio-toggle-btn" class="pixel-icon-btn" title="Bật/Tắt Âm thanh">
+      <span id="audio-icon">🔇</span> <span id="audio-label">Âm Thanh: TẮT</span>
+    </button>
+
+    <!-- GIAO DIỆN CHÍNH (MAIN MENU) -->
+    <div id="main-menu" class="menu-screen active">
+      <div class="title-container">
+        <h1 class="game-title" data-text="BLOODFIEND">BLOODFIEND</h1>
+        <div class="game-subtitle">HUYẾT QUỶ</div>
+        <div class="game-tagline">"Ánh sáng là sinh mạng duy nhất của bạn"</div>
+      </div>
+
+      <div class="menu-buttons">
+        <button id="btn-play" class="pixel-btn btn-primary">
+          <span class="btn-prefix">▶</span> CHƠI NGAY
+        </button>
+        <button id="btn-settings" class="pixel-btn">
+          <span class="btn-prefix">⚙</span> CÀI ĐẶT & QUY TẮC NÚT
+        </button>
+        <button id="btn-lore" class="pixel-btn">
+          <span class="btn-prefix">📜</span> HỒ SƠ TAI ƯƠNG
+        </button>
+      </div>
+
+      <div class="menu-footer">
+        <span>Bản thử nghiệm Demo v0.1 • Đồ họa 2D Pixel Horror</span>
+      </div>
+    </div>
+
+    <!-- MODAL: CHỌN CHẾ ĐỘ CHƠI -->
+    <div id="modal-mode-select" class="pixel-modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>CHỌN CHẾ ĐỘ TRẢI NGHIỆM</h2>
+          <button class="modal-close" data-close="modal-mode-select">&times;</button>
+        </div>
+        <div class="mode-cards">
+          <!-- Chế độ Sinh Tồn -->
+          <div class="mode-card survival" id="select-survival">
+            <div class="mode-badge">CHẾ ĐỘ CHÍNH</div>
+            <div class="mode-icon">🩸</div>
+            <h3 class="mode-title">SINH TỒN (SURVIVAL)</h3>
+            <p class="mode-desc">
+              Trải nghiệm kinh dị nguyên bản theo cốt truyện. Máu và đạn dược cực kỳ khan hiếm, pin đèn pin hao mòn theo thời gian. Quái vật nhạy cảm với tiếng động và sợ hãi ánh sáng.
+            </p>
+            <ul class="mode-features">
+              <li>✔ Máu & Đạn giới hạn</li>
+              <li>✔ Đèn pin cần quản lý năng lượng</li>
+              <li>✔ Quái vật săn lùng theo âm thanh</li>
+              <li>✔ Giải đố & Mở khóa vùng sáng</li>
+            </ul>
+            <button class="pixel-btn btn-danger btn-select-mode" data-mode="survival">CHỌN SINH TỒN</button>
+          </div>
+
+          <!-- Chế độ Sáng Tạo -->
+          <div class="mode-card creative" id="select-creative">
+            <div class="mode-badge">TỰ DO KHÁM PHÁ</div>
+            <div class="mode-icon">🛠️</div>
+            <h3 class="mode-title">SÁNG TẠO (CREATIVE)</h3>
+            <p class="mode-desc">
+              Dành cho việc trải nghiệm không gian, khảo sát bản đồ biệt thự và tìm hiểu toàn bộ hồ sơ bí mật mà không bị áp lực sinh tồn đe dọa.
+            </p>
+            <ul class="mode-features">
+              <li>✔ Bất tử (Không mất máu)</li>
+              <li>✔ Đạn dược & Pin đèn pin vô hạn</li>
+              <li>✔ Mở khóa sẵn các cửa & tủ đồ</li>
+              <li>✔ Tự do ngắm nhìn & thử nghiệm cơ chế</li>
+            </ul>
+            <button class="pixel-btn btn-success btn-select-mode" data-mode="creative">CHỌN SÁNG TẠO</button>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="pixel-btn btn-secondary modal-back" data-close="modal-mode-select">QUAY LẠI MENU</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL: CÀI ĐẶT & QUY TẮC NÚT (CONTROLS GUIDE) -->
+    <div id="modal-settings" class="pixel-modal">
+      <div class="modal-content large">
+        <div class="modal-header">
+          <h2>⚙ CÀI ĐẶT & BẢNG QUY TẮC ĐIỀU KHIỂN</h2>
+          <button class="modal-close" data-close="modal-settings">&times;</button>
+        </div>
+        
+        <div class="settings-body">
+          <!-- Bảng Quy Tắc Phím -->
+          <div class="settings-section">
+            <h3 class="section-title">SƠ ĐỒ PHÍM ĐIỀU KHIỂN (KEYBINDINGS)</h3>
+            <div class="key-grid">
+              <div class="key-row">
+                <span class="key-badge">W A S D</span>
+                <span class="key-action">Di chuyển nhân vật An (bước đi cẩn trọng)</span>
+              </div>
+              <div class="key-row">
+                <span class="key-badge">SHIFT</span>
+                <span class="key-action">Chạy nhanh <em class="warning-text">(Gây tiếng động thu hút Speedster!)</em></span>
+              </div>
+              <div class="key-row">
+                <span class="key-badge">CHUỘT</span>
+                <span class="key-action">Xoay hướng nhìn và rọi đèn pin 360°</span>
+              </div>
+              <div class="key-row">
+                <span class="key-badge">CHUỘT TRÁI</span>
+                <span class="key-action">Bắn súng lục / Đánh cận chiến bằng dao rựa</span>
+              </div>
+              <div class="key-row">
+                <span class="key-badge">F / CHUỘT PHẢI</span>
+                <span class="key-action">Bật / Tắt đèn pin <em class="tip-text">(Tắt để tiết kiệm pin khi có ánh nắng)</em></span>
+              </div>
+              <div class="key-row">
+                <span class="key-badge">E</span>
+                <span class="key-action">Tương tác: Kéo rèm đón nắng, nhặt đạn, mở khóa tủ, đọc hồ sơ</span>
+              </div>
+              <div class="key-row">
+                <span class="key-badge">R</span>
+                <span class="key-action">Thay băng đạn (Reload)</span>
+              </div>
+              <div class="key-row">
+                <span class="key-badge">TAB / I</span>
+                <span class="key-action">Mở túi đồ & xem các mẩu ghi chép đã thu thập</span>
+              </div>
+              <div class="key-row">
+                <span class="key-badge">ESC / P</span>
+                <span class="key-action">Tạm dừng game / Quay lại Menu</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tùy chỉnh hệ thống -->
+          <div class="settings-section">
+            <h3 class="section-title">TÙY CHỈNH HỆ THỐNG</h3>
+            <div class="setting-controls">
+              <div class="control-row">
+                <label for="master-volume">ÂM LƯỢNG TỔNG:</label>
+                <input type="range" id="master-volume" min="0" max="100" value="70">
+                <span id="volume-val">70%</span>
+              </div>
+              <div class="control-row">
+                <label for="crt-toggle">HIỆU ỨNG MÀN HÌNH CỔ (CRT/SCANLINE):</label>
+                <input type="checkbox" id="crt-toggle" checked>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button class="pixel-btn btn-secondary modal-back" data-close="modal-settings">ĐÓNG & LƯU</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL: HỒ SƠ TAI ƯƠNG (LORE) -->
+    <div id="modal-lore" class="pixel-modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>📜 NHẬT KÝ TUẦN TRA - SỰ KIỆN KHỞI ĐẦU</h2>
+          <button class="modal-close" data-close="modal-lore">&times;</button>
+        </div>
+        <div class="lore-body">
+          <p class="lore-date">Ngày 26 tháng 10 - 20:30 đêm mưa</p>
+          <p>
+            Tôi là <strong>An</strong>, một viên cảnh sát tuần tra. Trên cung đường rừng vắng vẻ ngoại ô, tôi phát hiện một chiếc xe chở hàng bị lật nghiêng bên vệ đường.
+          </p>
+          <p>
+            Vết máu tươi kéo dài từ cabin xe dẫn sâu vào con đường mòn phủ đầy dây leo. Cuối con đường là một căn biệt thự cổ kính tách biệt hoàn toàn với thế giới bên ngoài.
+          </p>
+          <p>
+            Cánh cửa chính mở hé. Trong bóng đêm tĩnh mịch vang lên những âm thanh cào cấu man dại và tiếng cầu cứu nghẹn ngào. Tôi rút khẩu súng lục và chiếc đèn pin, chuẩn bị bước vào...
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button class="pixel-btn btn-secondary modal-back" data-close="modal-lore">QUAY LẠI</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MÀN HÌNH CHUYỂN CẢNH KHI VÀO GAME (INTO THE DARKNESS) -->
+    <div id="game-transition" class="transition-screen">
+      <div class="transition-box">
+        <div class="spinner-pixel"></div>
+        <h2 id="transition-mode-title">ĐANG KHỞI TẠO KHÔNG GIAN...</h2>
+        <p id="transition-mode-desc">Hãy chuẩn bị tinh thần bước vào bóng tối.</p>
+        <button id="btn-start-gameplay" class="pixel-btn btn-primary" style="margin-top: 20px;">BƯỚC VÀO BIỆT THỰ</button>
+      </div>
+    </div>
+
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
+

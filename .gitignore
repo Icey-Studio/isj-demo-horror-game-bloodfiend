@@ -1,0 +1,71 @@
+# =========================================================
+# DANH SÁCH TỆP & THƯ MỤC BỎ QUA KHI PUSH LÊN GIT (.gitignore)
+# Dự án: Bloodfiend - Huyết Quỷ | Icey Studio
+# =========================================================
+
+# 1. Thư viện phụ thuộc Node.js (Tuyệt đối không push lên Git - cài lại bằng `npm install`)
+node_modules/
+jspm_packages/
+.pnp
+.pnp.js
+
+# 2. Thư mục đóng gói bản dựng Production của Vite (Sinh ra tự động khi chạy `npm run build`)
+dist/
+dist-ssr/
+build/
+out/
+*.local
+
+# 3. Các tệp nhật ký lỗi & Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# 4. Biến môi trường & Khóa bảo mật cá nhân (Environment Variables & Secrets)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*.local
+
+# 5. Bộ nhớ đệm của trình biên dịch & Công cụ kiểm thử (Caches)
+.vite/
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+coverage/
+*.tsbuildinfo
+
+# 6. Tệp cấu hình cá nhân của IDE / Trình soạn thảo mã nguồn
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# 7. Tệp rác của Hệ điều hành (Windows / macOS / Linux)
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# 8. Các tệp nén hoặc bản sao lưu tạm thời
+*.bak
+*.tmp
+*.temp
+*~
+
