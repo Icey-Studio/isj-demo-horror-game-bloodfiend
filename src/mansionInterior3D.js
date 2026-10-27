@@ -4,6 +4,7 @@
 // và Kịch bản chính thức "Bloodfiend - Huyết Quỷ"
 // ============================================================================
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { playerInventory } from './playerInventoryAndCharacter.js';
 import { audioManager } from './audio.js';
 
@@ -112,7 +113,19 @@ export const MANSION_CLUE_DOCUMENTS = {
   }
 };
 
+let currentWorld = null;
+export function registerInteriorLight(light, floor) {
+  if (currentWorld) {
+    if (!currentWorld.interiorLights) currentWorld.interiorLights = [];
+    currentWorld.interiorLights.push({ light, floor });
+  }
+  return light;
+}
+
 export function buildMansionInterior(world, mansionGroup) {
+  currentWorld = world;
+  world.interiorLights = [];
+  world.registerInteriorLight = registerInteriorLight;
   const ox = MANSION_ORIGIN.x;
   const oz = MANSION_ORIGIN.z;
 
@@ -133,7 +146,7 @@ export function buildMansionInterior(world, mansionGroup) {
   const createWall = (x, y, z, w, h, d, mat, collide = true) => {
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
     mesh.position.set(x, y + h / 2, z);
-    mesh.castShadow = true;
+    mesh.castShadow = false; // Tối ưu GPU: không nạp hàng trăm tường ngăn vào shadow map
     mesh.receiveShadow = true;
     mansionGroup.add(mesh);
     if (collide) {
@@ -180,22 +193,76 @@ export function buildMansionInterior(world, mansionGroup) {
       }
     }
 
-    // Khung gỗ bao quanh cửa + cánh cửa mở hé nghệ thuật
+    // Khung cửa gỗ chạm khắc cổ điển + Cánh cửa 4 ô pano nổi, bản lề & tay nắm đồng thau chi tiết
     if (trimMat) {
       const frame = new THREE.Group();
-      const post1 = new THREE.Mesh(new THREE.BoxGeometry(0.16, doorHeight, 0.42), trimMat);
-      const post2 = new THREE.Mesh(new THREE.BoxGeometry(0.16, doorHeight, 0.42), trimMat);
-      post1.position.set(-doorWidth / 2, doorHeight / 2, 0);
-      post2.position.set(doorWidth / 2, doorHeight / 2, 0);
-      const lintel = new THREE.Mesh(new THREE.BoxGeometry(doorWidth + 0.3, 0.2, 0.44), trimMat);
-      lintel.position.set(0, doorHeight, 0);
-      frame.add(post1, post2, lintel);
+      const frameDepth = Math.max(thickness + 0.1, 0.44);
 
-      // Cánh cửa mở hé 75 độ để người chơi đi qua thoải mái mà vẫn chân thực
-      const doorLeaf = new THREE.Mesh(new THREE.BoxGeometry(doorWidth * 0.85, doorHeight - 0.1, 0.09), trimMat);
-      doorLeaf.position.set(-doorWidth * 0.15, (doorHeight - 0.1) / 2, doorWidth * 0.4);
-      doorLeaf.rotation.y = 1.28;
-      frame.add(doorLeaf);
+      // Hai trụ khung bao cửa có chỉ nổi (Moulded Door Jambs & Architrave)
+      [-doorWidth / 2, doorWidth / 2].forEach((px) => {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.18, doorHeight, frameDepth), trimMat);
+        post.position.set(px, doorHeight / 2, 0);
+        const casing = new THREE.Mesh(new THREE.BoxGeometry(0.26, doorHeight + 0.08, frameDepth + 0.06), trimMat);
+        casing.position.set(px, doorHeight / 2, 0);
+        frame.add(post, casing);
+      });
+
+      // Đà ngang & phào vương miện phía trên khung cửa (Classical Pediment Header & Crown Molding)
+      const lintel = new THREE.Mesh(new THREE.BoxGeometry(doorWidth + 0.42, 0.22, frameDepth + 0.08), trimMat);
+      lintel.position.set(0, doorHeight + 0.04, 0);
+      const crown = new THREE.Mesh(new THREE.BoxGeometry(doorWidth + 0.56, 0.12, frameDepth + 0.16), trimMat);
+      crown.position.set(0, doorHeight + 0.2, 0);
+      frame.add(lintel, crown);
+
+      // Cánh cửa gỗ Gụ (Mahogany) chạm khắc 4 ô Pano + Tay nắm đồng thau 2 mặt (mở hé để đi qua tự nhiên)
+      const leafW = Math.min(doorWidth * 0.82, 1.45);
+      const leafH = Math.min(doorHeight - 0.08, 3.15);
+      const doorHingeGroup = new THREE.Group();
+      doorHingeGroup.position.set(-doorWidth / 2 + 0.09, 0, frameDepth * 0.25);
+      doorHingeGroup.rotation.y = 1.18; // Mở rộng 68 độ vào phòng
+
+      const doorSlab = new THREE.Mesh(new THREE.BoxGeometry(leafW, leafH, 0.085), interiorDoorMat);
+      doorSlab.position.set(leafW / 2, leafH / 2, 0);
+      doorHingeGroup.add(doorSlab);
+
+      // 4 khung phào nổi Pano trên cả 2 mặt cánh cửa (Upper & Lower Recessed Mouldings)
+      const panelW = leafW * 0.34;
+      const upperH = leafH * 0.36;
+      const lowerH = leafH * 0.28;
+      [-leafW * 0.21, leafW * 0.21].forEach((px) => {
+        const upPanel = new THREE.Mesh(new THREE.BoxGeometry(panelW, upperH, 0.115), trimMat);
+        upPanel.position.set(leafW / 2 + px, leafH * 0.68, 0);
+        const lowPanel = new THREE.Mesh(new THREE.BoxGeometry(panelW, lowerH, 0.115), trimMat);
+        lowPanel.position.set(leafW / 2 + px, leafH * 0.25, 0);
+        doorHingeGroup.add(upPanel, lowPanel);
+      });
+
+      // 3 Bản lề đồng thau dọc trục xoay
+      [0.35, leafH * 0.5, leafH - 0.35].forEach((hy) => {
+        const hingeBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.14, 8), brassMat);
+        hingeBarrel.position.set(0.02, hy, 0);
+        doorHingeGroup.add(hingeBarrel);
+      });
+
+      // Ổ khóa cổ & Tay nắm gạt bằng đồng thau (Brass Escutcheon & Lever Handles) ở cả 2 mặt cửa
+      const handleX = leafW - 0.14;
+      const handleY = Math.min(1.05, leafH * 0.46);
+      const lockPlate = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.24, 0.11), brassMat);
+      lockPlate.position.set(handleX, handleY, 0);
+      doorHingeGroup.add(lockPlate);
+
+      [-0.075, 0.075].forEach((hz) => {
+        const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.06, 8), brassMat);
+        neck.rotation.x = Math.PI / 2;
+        neck.position.set(handleX, handleY + 0.03, hz);
+        const lever = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.024, 0.024), brassMat);
+        lever.position.set(handleX - 0.045, handleY + 0.03, hz + (hz > 0 ? 0.025 : -0.025));
+        const knobSphere = new THREE.Mesh(new THREE.SphereGeometry(0.028, 8, 8), brassMat);
+        knobSphere.position.set(handleX, handleY + 0.03, hz + (hz > 0 ? 0.025 : -0.025));
+        doorHingeGroup.add(neck, lever, knobSphere);
+      });
+
+      frame.add(doorHingeGroup);
 
       if (alongZ) {
         frame.position.set(x, y, z + doorOffset);
@@ -215,41 +282,60 @@ export function buildMansionInterior(world, mansionGroup) {
     roughness: 0.9,
     metalness: 0.12
   });
+  const victorianWallTex = createVictorianWallpaperTexture();
   const wallpaperMat = new THREE.MeshStandardMaterial({
-    color: 0x3b2d28,
-    roughness: 0.85
+    map: victorianWallTex,
+    roughness: 0.78,
+    metalness: 0.08
   });
   const wainscotWoodMat = new THREE.MeshStandardMaterial({
     color: 0x26150d,
-    roughness: 0.65,
-    metalness: 0.1
+    roughness: 0.58,
+    metalness: 0.12
   });
+  const interiorDoorTex = createInteriorDoorTexture();
+  const interiorDoorMat = new THREE.MeshStandardMaterial({
+    map: interiorDoorTex,
+    roughness: 0.48,
+    metalness: 0.14
+  });
+  const labWallTex = createBasementLabWallTexture();
   const labWallMat = new THREE.MeshStandardMaterial({
-    color: 0x2a3338,
-    roughness: 0.55,
+    map: labWallTex,
+    roughness: 0.5,
     metalness: 0.35
   });
   const marbleFloorTex = createCheckeredMarbleTexture();
   const foyerFloorMat = new THREE.MeshStandardMaterial({
     map: marbleFloorTex,
-    roughness: 0.35,
-    metalness: 0.15
+    roughness: 0.32,
+    metalness: 0.18
   });
   const woodFloorTex = createHardwoodFloorTexture();
   const woodFloorMat = new THREE.MeshStandardMaterial({
     map: woodFloorTex,
-    roughness: 0.55,
-    metalness: 0.08
+    roughness: 0.5,
+    metalness: 0.1
   });
   const labFloorTex = createLabTileTexture();
   const basementFloorMat = new THREE.MeshStandardMaterial({
     map: labFloorTex,
-    roughness: 0.45,
+    roughness: 0.42,
     metalness: 0.25
   });
-  const velvetRedMat = new THREE.MeshStandardMaterial({ color: 0x5e0b12, roughness: 0.8 });
-  const darkLeatherMat = new THREE.MeshStandardMaterial({ color: 0x24140e, roughness: 0.5, metalness: 0.1 });
-  const brassMat = new THREE.MeshStandardMaterial({ color: 0xb8923a, roughness: 0.3, metalness: 0.85 });
+  const persianRugTex = createPersianRugTexture();
+  const velvetRedMat = new THREE.MeshStandardMaterial({
+    map: persianRugTex,
+    roughness: 0.82
+  });
+  const plainVelvetMat = new THREE.MeshStandardMaterial({ color: 0x630d16, roughness: 0.78 });
+  const bookshelfTex = createBookshelfTexture();
+  const bookshelfMat = new THREE.MeshStandardMaterial({
+    map: bookshelfTex,
+    roughness: 0.68
+  });
+  const darkLeatherMat = new THREE.MeshStandardMaterial({ color: 0x24140e, roughness: 0.45, metalness: 0.12 });
+  const brassMat = new THREE.MeshStandardMaterial({ color: 0xc89e3a, roughness: 0.28, metalness: 0.85 });
   const steelMat = new THREE.MeshStandardMaterial({ color: 0x99a3ad, roughness: 0.28, metalness: 0.85 });
   const glassMat = new THREE.MeshStandardMaterial({
     color: 0x88ccff,
@@ -307,15 +393,22 @@ export function buildMansionInterior(world, mansionGroup) {
   addFloorSlab(-16, -12, 2.0, 12, 0.26, 0.26, woodFloorMat);
   addFloorSlab(-16, -12, -24, -6.5, 0.26, 0.26, woodFloorMat);
 
-  // --- SÀN TẦNG 2 (y = 7.06) ---
-  // Chừa thông tầng Đại Sảnh (x: -7..7, z: -3.5..10.5) để thấy cầu thang đôi và đèn chùm
-  addFloorSlab(-24, -7, -24, 12, 7.06, 0.28, woodFloorMat); // Toàn bộ Cánh Tây 2F
-  addFloorSlab(7, 24, -24, 12, 7.06, 0.28, woodFloorMat);   // Toàn bộ Cánh Đông 2F
-  addFloorSlab(-7, 7, -24, -3.5, 7.06, 0.28, woodFloorMat); // Hành lang Bắc & Phòng Sinh Hoạt Gia Đình 2F
-  addFloorSlab(-7, 7, 10.5, 12, 7.06, 0.28, woodFloorMat);  // Ban công nhỏ sát tường Nam 2F
+  // --- SÀN TẦNG 2 (y = 7.06) — CHUẨN KẾT CẤU KIẾN TRÚC, ĐẦY ĐỦ HÀNH LANG BAO QUANH THÔNG TẦNG ---
+  // Toàn bộ Cánh Tây 2F (x: -24..-8, z: -24..12) và Cánh Đông 2F (x: 8..24, z: -24..12)
+  addFloorSlab(-24, -8, -24, 12, 7.06, 0.28, woodFloorMat);
+  addFloorSlab(8, 24, -24, 12, 7.06, 0.28, woodFloorMat);
+  // Sảnh Đích Cầu Thang Đôi & Phòng Sinh Hoạt Gia Đình 2F (x: -8..8, z: -24..-3.5)
+  addFloorSlab(-8, 8, -24, -3.5, 7.06, 0.28, woodFloorMat);
+  // Hành lang ban công hai bên hông Cầu Thang Đôi (x: -8.0..-6.8 và x: 6.8..8.0, z: -3.5..4.5)
+  addFloorSlab(-8.0, -6.8, -3.5, 4.5, 7.06, 0.28, woodFloorMat);
+  addFloorSlab(6.8, 8.0, -3.5, 4.5, 7.06, 0.28, woodFloorMat);
+  // Ban công phía Nam Tầng 2 (x: -8.0..-4.2 và 4.2..8.0 từ z: 4.5..12.0; cộng hành lang ngắm Đèn Chùm x: -4.2..4.2, z: 8.5..12.0)
+  addFloorSlab(-8.0, -4.2, 4.5, 12.0, 7.06, 0.28, woodFloorMat);
+  addFloorSlab(4.2, 8.0, 4.5, 12.0, 7.06, 0.28, woodFloorMat);
+  addFloorSlab(-4.2, 4.2, 8.5, 12.0, 7.06, 0.28, woodFloorMat);
 
   // --- TRẦN TẦNG 2 (y = 13.56) ---
-  addFloorSlab(-24, 24, -24, 12, 13.56, 0.3, wallpaperMat);
+  addFloorSlab(-24, 24, -24, 12, 13.56, 0.3, wainscotWoodMat);
 
   // --- SÀN TẦNG HẦM B1 (y = -6.20) ---
   addFloorSlab(-24, 24, -24, 12, -6.20, 0.3, basementFloorMat);
@@ -339,7 +432,7 @@ export function buildMansionInterior(world, mansionGroup) {
         mat
       );
       stepMesh.position.set(centerX, sy, sz);
-      stepMesh.castShadow = true;
+      stepMesh.castShadow = false;
       stepMesh.receiveShadow = true;
       mansionGroup.add(stepMesh);
 
@@ -364,41 +457,64 @@ export function buildMansionInterior(world, mansionGroup) {
   };
 
   // Cầu thang đôi lên Tầng 2
-  buildStairFlight(-6.8, -4.2, 4.5, -3.5, 0.26, 7.06, 22, wainscotWoodMat, velvetRedMat);
-  buildStairFlight(4.2, 6.8, 4.5, -3.5, 0.26, 7.06, 22, wainscotWoodMat, velvetRedMat);
+  buildStairFlight(-6.8, -4.2, 4.5, -3.5, 0.26, 7.06, 22, wainscotWoodMat, plainVelvetMat);
+  buildStairFlight(4.2, 6.8, 4.5, -3.5, 0.26, 7.06, 22, wainscotWoodMat, plainVelvetMat);
 
-  // Lan can bảo vệ quanh khoảng thông tầng Tầng 2 (Atrium Railing)
-  createWall(-4.1, 7.06, 3.5, 0.18, 1.05, 14.0, wainscotWoodMat, true);
-  createWall(4.1, 7.06, 3.5, 0.18, 1.05, 14.0, wainscotWoodMat, true);
-  createWall(0, 7.06, -3.5, 8.4, 1.05, 0.18, wainscotWoodMat, false); // Phía Bắc thông tầng mở lối cho cầu thang
+  // Lan can gỗ chạm khắc bao quanh khoảng thông tầng Tầng 2 (x: -4.1..4.1, z: -3.5..8.5) — Mở hoàn toàn 2 đầu cầu thang đôi!
+  createWall(-4.1, 7.06, 2.5, 0.18, 1.05, 12.0, wainscotWoodMat, true);
+  createWall(4.1, 7.06, 2.5, 0.18, 1.05, 12.0, wainscotWoodMat, true);
+  createWall(0, 7.06, -3.5, 8.2, 1.05, 0.18, wainscotWoodMat, true);
+  createWall(0, 7.06, 8.5, 8.2, 1.05, 0.18, wainscotWoodMat, true);
+
+  // Đèn tường chiếu sáng rõ ràng cho 2 nhánh Cầu Thang Đôi lên Tầng 2
+  const stair2FLightL = new THREE.PointLight(0xffbb66, 5.5, 18);
+  stair2FLightL.position.set(-5.5, 4.8, 0.5);
+  registerInteriorLight(stair2FLightL, 'floor1');
+  const stair2FLightR = new THREE.PointLight(0xffbb66, 5.5, 18);
+  stair2FLightR.position.set(5.5, 4.8, 0.5);
+  registerInteriorLight(stair2FLightR, 'floor1');
+  mansionGroup.add(stair2FLightL, stair2FLightR);
 
   // 3B. CẦU THANG PHỤ B XUỐNG TẦNG HẦM B1 (SERVICE STAIR B: 1F y=0.26 -> B1 y=-6.20)
   // Nằm tại x = -16.0 .. -12.0, đi từ z = +2.0 (y = 0.26) xuống phía Bắc z = -6.5 (y = -6.20)
   buildStairFlight(-15.8, -12.2, 2.0, -6.5, 0.26, -6.20, 22, steelMat, null);
-  // Tường bao hai bên hố thang hầm B1 trên Tầng 1 để người chơi không rơi ngang xuống hố
+  // Tường lan can bảo vệ hai bên hố thang hầm B1 trên Tầng 1
   createWall(-16.0, 0.26, -2.25, 0.22, 1.2, 8.5, wainscotWoodMat, true);
   createWall(-12.0, 0.26, -2.25, 0.22, 1.2, 8.5, wainscotWoodMat, true);
 
+  // Đèn dẫn đường chiếu sáng trực tiếp dọc hố Cầu Thang Hầm B1
+  const stairB1LightTop = new THREE.PointLight(0xffaa55, 6.0, 16);
+  stairB1LightTop.position.set(-14.0, 2.8, 1.5);
+  registerInteriorLight(stairB1LightTop, 'floor1');
+  const stairB1LightBot = new THREE.PointLight(0x88ddff, 6.5, 18);
+  stairB1LightBot.position.set(-14.0, -2.2, -5.5);
+  registerInteriorLight(stairB1LightBot, 'basement');
+  mansionGroup.add(stairB1LightTop, stairB1LightBot);
+
   // ==========================================================================
-  // 4. VÁCH NGĂN CÁC PHÒNG & NỘI THẤT TẦNG 1 (1F — y = 0.26)
+  // 4. VÁCH NGĂN CÁC PHÒNG & NỘI THẤT TẦNG 1 (1F — y = 0.26) — CHUẨN BẢN VẼ & LỐI ĐI RÕ RÀNG
   // ==========================================================================
   // Tường dọc ngăn cách Đại Sảnh / Trung tâm với Cánh Tây (x = -8.0) và Cánh Đông (x = +8.0)
-  createWallWithDoor(-8.0, 0.26, 4.0, 16.0, H1, 0.35, true, 2.0, 2.6, 3.4, wallpaperMat, wainscotWoodMat);
-  createWallWithDoor(-8.0, 0.26, -14.0, 20.0, H1, 0.35, true, 0.0, 2.6, 3.4, wallpaperMat, wainscotWoodMat);
+  // Cửa phía Nam đặt tại z = 7.5 (trước chân cầu thang đôi), cửa phía Bắc đặt tại z = -10.0 (từ Phòng Khách sang Thư Viện / Phòng Ăn)
+  createWallWithDoor(-8.0, 0.26, 4.0, 16.0, H1, 0.35, true, 3.5, 2.8, 3.6, wallpaperMat, wainscotWoodMat);
+  createWallWithDoor(-8.0, 0.26, -14.0, 20.0, H1, 0.35, true, 4.0, 2.8, 3.6, wallpaperMat, wainscotWoodMat);
 
-  createWallWithDoor(8.0, 0.26, 4.0, 16.0, H1, 0.35, true, 2.0, 2.8, 3.4, wallpaperMat, wainscotWoodMat);
-  createWallWithDoor(8.0, 0.26, -14.0, 20.0, H1, 0.35, true, 0.0, 2.8, 3.4, wallpaperMat, wainscotWoodMat);
+  createWallWithDoor(8.0, 0.26, 4.0, 16.0, H1, 0.35, true, 3.5, 2.8, 3.6, wallpaperMat, wainscotWoodMat);
+  createWallWithDoor(8.0, 0.26, -14.0, 20.0, H1, 0.35, true, 4.0, 2.8, 3.6, wallpaperMat, wainscotWoodMat);
 
   // Vách ngăn ngang ở Trung tâm 1F: Đại Sảnh -> Phòng Khách (z = -4.0) -> Nhà Nguyện (z = -15.0)
-  createWallWithDoor(0, 0.26, -4.0, 16.0, H1, 0.35, false, 0, 3.8, 4.0, wallpaperMat, wainscotWoodMat);
+  createWallWithDoor(0, 0.26, -4.0, 16.0, H1, 0.35, false, 0, 3.6, 4.0, wallpaperMat, wainscotWoodMat);
   createWallWithDoor(0, 0.26, -15.0, 16.0, H1, 0.35, false, 0, 3.4, 3.8, wallpaperMat, wainscotWoodMat);
 
-  // Vách ngăn ngang ở Cánh Tây 1F: Nhà Kính (Conservatory, z: 3..12) | Hành lang Thang B1 & Phòng Lưu | Thư Viện (z: -24..-7)
-  createWallWithDoor(-16.0, 0.26, 3.0, 16.0, H1, 0.32, false, 4.5, 2.4, 3.2, wallpaperMat, wainscotWoodMat);
-  createWallWithDoor(-16.0, 0.26, -7.0, 16.0, H1, 0.32, false, 4.5, 2.4, 3.2, wallpaperMat, wainscotWoodMat);
+  // Vách ngăn Cánh Tây 1F:
+  // Nhà Kính Thực Vật nằm gọn ở góc Tây-Nam (x: -24..-16.2, z: 2.5..12.0), để toàn bộ sảnh trước Cầu Thang Hầm B1 (x: -16.2..-8.0) thông thoáng 100%!
+  createWallWithDoor(-16.2, 0.26, 7.25, 9.5, H1, 0.32, true, 0.0, 2.8, 3.5, wallpaperMat, wainscotWoodMat);
+  createWall(-20.1, 0.26, 2.5, 7.8, H1, 0.32, wallpaperMat, true);
+  // Tường ngăn vào Thư Viện Cổ tại z = -7.5 (Cửa rộng đặt ở x = -10.2, thẳng trục hành lang bên phải Cầu Thang Hầm B1)
+  createWallWithDoor(-16.0, 0.26, -7.5, 16.0, H1, 0.32, false, 5.8, 3.0, 3.6, wallpaperMat, wainscotWoodMat);
 
   // Vách ngăn ngang ở Cánh Đông 1F: Nhà Bếp (z: 2..12) | Phòng Ăn Lớn (Grand Dining Hall, z: -24..2)
-  createWallWithDoor(16.0, 0.26, 2.0, 16.0, H1, 0.32, false, 0, 3.0, 3.4, wallpaperMat, wainscotWoodMat);
+  createWallWithDoor(16.0, 0.26, 2.0, 16.0, H1, 0.32, false, 0, 3.0, 3.6, wallpaperMat, wainscotWoodMat);
 
   // --- NỘI THẤT PHÒNG 1.1: ĐẠI SẢNH CHÍNH (GRAND FOYER) ---
   // Thảm nhung đỏ trải từ cửa chính tới chân cầu thang
@@ -426,11 +542,15 @@ export function buildMansionInterior(world, mansionGroup) {
   }
   const foyerLight = new THREE.PointLight(0xffaa55, 8.5, 28);
   foyerLight.position.set(0, -0.3, 0);
+  registerInteriorLight(foyerLight, 'floor1');
   chandelier.add(foyerLight);
   mansionGroup.add(chandelier);
 
   // Bàn tròn trung tâm Đại Sảnh có bình hoa cổ
   createRoundTableWithVase(mansionGroup, addLocalCollider, 0, 0.26, 4.8, wainscotWoodMat, brassMat);
+
+  // Tích hợp Nội Thất Sang Trọng Đại Sảnh: Đồng hồ quả lắc cổ, Tủ gỗ trưng bày, Tranh sơn dầu & Đèn tường đồng
+  buildGrandFoyerDetails(mansionGroup, addLocalCollider, world, wainscotWoodMat, brassMat, velvetRedMat);
 
   // Thi thể nhân viên giao hàng Quý nằm gục trên vũng máu gần lối rẽ Cánh Tây Đại Sảnh
   const victimGroup = new THREE.Group();
@@ -463,11 +583,11 @@ export function buildMansionInterior(world, mansionGroup) {
   // --- NỘI THẤT PHÒNG 1.3: NHÀ NGUYỆN GIA TỘC (CHAPEL, x: -7..7, z: -24..-15) ---
   buildChapelInterior(mansionGroup, addLocalCollider, 0, 0.26, -19.5, wainscotWoodMat, velvetRedMat, brassMat);
 
-  // --- NỘI THẤT PHÒNG 1.4: NHÀ KÍNH THỰC VẬT (CONSERVATORY, x: -24..-8, z: 3..12) ---
-  buildConservatoryRoom(mansionGroup, addLocalCollider, world, -16.0, 0.26, 7.5, wainscotWoodMat, glassMat);
+  // --- NỘI THẤT PHÒNG 1.4: NHÀ KÍNH THỰC VẬT (CONSERVATORY, x: -24..-16.2, z: 2.5..12) ---
+  buildConservatoryRoom(mansionGroup, addLocalCollider, world, -20.2, 0.26, 7.2, wainscotWoodMat, glassMat);
 
-  // --- NỘI THẤT PHÒNG 1.5: THƯ VIỆN CỔ & PHÒNG LƯU (LIBRARY & STUDY, x: -24..-8, z: -24..-7) ---
-  buildLibraryRoom(mansionGroup, addLocalCollider, world, -16.0, 0.26, -15.5, wainscotWoodMat, darkLeatherMat, brassMat);
+  // --- NỘI THẤT PHÒNG 1.5: THƯ VIỆN CỔ & PHÒNG LƯU (LIBRARY & STUDY, x: -24..-8, z: -24..-7.5) ---
+  buildLibraryRoom(mansionGroup, addLocalCollider, world, -16.0, 0.26, -15.8, wainscotWoodMat, darkLeatherMat, brassMat, bookshelfMat, velvetRedMat);
 
   // --- NỘI THẤT PHÒNG 1.6: NHÀ BẾP & KHO (KITCHEN, x: 8..24, z: 2..12) ---
   buildKitchenRoom(mansionGroup, addLocalCollider, 16.0, 0.26, 7.0, steelMat, wainscotWoodMat, bloodMat);
@@ -476,36 +596,40 @@ export function buildMansionInterior(world, mansionGroup) {
   buildGrandDiningHall(mansionGroup, addLocalCollider, 16.0, 0.26, -11.0, wainscotWoodMat, velvetRedMat, brassMat, steelMat);
 
   // ==========================================================================
-  // 5. VÁCH NGĂN CÁC PHÒNG & NỘI THẤT TẦNG 2 (2F — y = 7.06)
+  // 5. VÁCH NGĂN CÁC PHÒNG & NỘI THẤT TẦNG 2 (2F — y = 7.06) — CHUẨN KẾT CẤU, CỬA ĐẶT TRÊN SÀN ĐẶC 100%
   // ==========================================================================
-  // Tường dọc hai bên hành lang trung tâm Tầng 2 (x = -7.0 và x = +7.0)
-  createWallWithDoor(-7.0, 7.06, -6.0, 36.0, H2, 0.32, true, 6.0, 2.4, 3.2, wallpaperMat, wainscotWoodMat);
-  createWallWithDoor(7.0, 7.06, -6.0, 36.0, H2, 0.32, true, 6.0, 2.4, 3.2, wallpaperMat, wainscotWoodMat);
+  // Tường dọc hai bên Sảnh Tầng 2 (x = -8.0 và x = +8.0, đồng bộ với tường chịu lực Tầng 1!)
+  // Cửa phía Bắc đặt tại z = -6.8 (ngay trên Sảnh Đích Cầu Thang Đôi z: -10.5..-3.5), cửa phía Nam đặt tại z = +7.5 (ngay trên Ban Công Nam z: 4.5..12.0)!
+  createWallWithDoor(-8.0, 7.06, 4.0, 16.0, H2, 0.32, true, 3.5, 2.5, 3.4, wallpaperMat, wainscotWoodMat);
+  createWallWithDoor(-8.0, 7.06, -14.0, 20.0, H2, 0.32, true, 7.2, 2.6, 3.4, wallpaperMat, wainscotWoodMat);
 
-  // Cánh Tây Tầng 2: Phòng Làm Việc Ông Bình (z: 0..12) | Phòng Ngủ Chính Master Bedroom (z: -24..0)
-  createWallWithDoor(-15.5, 7.06, 0.0, 17.0, H2, 0.32, false, 4.5, 2.4, 3.2, wallpaperMat, wainscotWoodMat);
+  createWallWithDoor(8.0, 7.06, 4.0, 16.0, H2, 0.32, true, 3.5, 2.5, 3.4, wallpaperMat, wainscotWoodMat);
+  createWallWithDoor(8.0, 7.06, -14.0, 20.0, H2, 0.32, true, 7.2, 2.6, 3.4, wallpaperMat, wainscotWoodMat);
 
-  // Cánh Đông Tầng 2: Phòng Ngủ Của Chi (z: 2..12) | Phòng Điều Trị (z: -11..2) | Phòng Cách Ly (z: -24..-11)
-  createWallWithDoor(15.5, 7.06, 2.0, 17.0, H2, 0.32, false, -4.5, 2.4, 3.2, wallpaperMat, wainscotWoodMat);
-  createWallWithDoor(15.5, 7.06, -11.0, 17.0, H2, 0.32, false, -4.5, 2.4, 3.2, wallpaperMat, wainscotWoodMat);
+  // Cánh Tây Tầng 2 (x: -24..-8): Phòng Làm Việc Ông Bình (z: 0..12) | Phòng Ngủ Chính Master Bedroom (z: -24..0)
+  createWallWithDoor(-16.0, 7.06, 0.0, 16.0, H2, 0.32, false, 4.0, 2.5, 3.4, wallpaperMat, wainscotWoodMat);
 
-  // --- NỘI THẤT PHÒNG 2.1: PHÒNG SINH HOẠT GIA ĐÌNH & BỨC TRANH CỦA CHI (x: -7..7, z: -24..-4) ---
-  buildFamilyLounge2F(mansionGroup, addLocalCollider, world, 0, 7.06, -14.0, wainscotWoodMat, velvetRedMat, brassMat);
+  // Cánh Đông Tầng 2 (x: 8..24): Phòng Ngủ Của Chi (z: 2..12) | Phòng Điều Trị (z: -11..2) | Phòng Cách Ly (z: -24..-11)
+  createWallWithDoor(16.0, 7.06, 2.0, 16.0, H2, 0.32, false, -4.0, 2.5, 3.4, wallpaperMat, wainscotWoodMat);
+  createWallWithDoor(16.0, 7.06, -11.0, 16.0, H2, 0.32, false, -4.0, 2.5, 3.4, wallpaperMat, wainscotWoodMat);
 
-  // --- NỘI THẤT PHÒNG 2.2: PHÒNG LÀM VIỆC CỦA ÔNG BÌNH (BÌNH'S STUDY, x: -24..-7, z: 0..12) ---
-  buildBinhStudy2F(mansionGroup, addLocalCollider, world, -15.5, 7.06, 6.0, wainscotWoodMat, darkLeatherMat, brassMat);
+  // --- NỘI THẤT PHÒNG 2.1: PHÒNG SINH HOẠT GIA ĐÌNH & BỨC TRANH CỦA CHI (x: -8..8, z: -24..-4) ---
+  buildFamilyLounge2F(mansionGroup, addLocalCollider, world, 0, 7.06, -14.0, wainscotWoodMat, velvetRedMat, brassMat, darkLeatherMat);
 
-  // --- NỘI THẤT PHÒNG 2.3: PHÒNG NGỦ CHÍNH (MASTER BEDROOM, x: -24..-7, z: -24..0) ---
-  buildMasterBedroom2F(mansionGroup, addLocalCollider, -15.5, 7.06, -12.0, wainscotWoodMat, velvetRedMat, brassMat);
+  // --- NỘI THẤT PHÒNG 2.2: PHÒNG LÀM VIỆC CỦA ÔNG BÌNH (BÌNH'S STUDY, x: -24..-8, z: 0..12) ---
+  buildBinhStudy2F(mansionGroup, addLocalCollider, world, -16.0, 7.06, 6.0, wainscotWoodMat, darkLeatherMat, brassMat, bookshelfMat);
 
-  // --- NỘI THẤT PHÒNG 2.4: PHÒNG NGỦ CỦA CHI (CHI'S BEDROOM, x: 7..24, z: 2..12) ---
-  buildChiBedroom2F(mansionGroup, addLocalCollider, 15.5, 7.06, 7.0, wainscotWoodMat, brassMat);
+  // --- NỘI THẤT PHÒNG 2.3: PHÒNG NGỦ CHÍNH (MASTER BEDROOM, x: -24..-8, z: -24..0) ---
+  buildMasterBedroom2F(mansionGroup, addLocalCollider, -16.0, 7.06, -12.0, wainscotWoodMat, velvetRedMat, brassMat);
 
-  // --- NỘI THẤT PHÒNG 2.5: PHÒNG ĐIỀU TRỊ Y TẾ (TREATMENT ROOM, x: 7..24, z: -11..2) ---
-  buildTreatmentRoom2F(mansionGroup, addLocalCollider, world, 15.5, 7.06, -4.5, steelMat, bloodMat);
+  // --- NỘI THẤT PHÒNG 2.4: PHÒNG NGỦ CỦA CHI (CHI'S BEDROOM, x: 8..24, z: 2..12) ---
+  buildChiBedroom2F(mansionGroup, addLocalCollider, 16.0, 7.06, 7.0, wainscotWoodMat, brassMat, velvetRedMat);
 
-  // --- NỘI THẤT PHÒNG 2.6: PHÒNG CÁCH LY KIÊN CỐ CỦA CHI (ISOLATION ROOM, x: 7..24, z: -24..-11) ---
-  buildIsolationRoom2F(mansionGroup, addLocalCollider, world, 15.5, 7.06, -17.5, steelMat, bloodMat);
+  // --- NỘI THẤT PHÒNG 2.5: PHÒNG ĐIỀU TRỊ Y TẾ (TREATMENT ROOM, x: 8..24, z: -11..2) ---
+  buildTreatmentRoom2F(mansionGroup, addLocalCollider, world, 16.0, 7.06, -4.5, steelMat, bloodMat);
+
+  // --- NỘI THẤT PHÒNG 2.6: PHÒNG CÁCH LY KIÊN CỐ CỦA CHI (ISOLATION ROOM, x: 8..24, z: -24..-11) ---
+  buildIsolationRoom2F(mansionGroup, addLocalCollider, world, 16.0, 7.06, -17.5, steelMat, bloodMat);
 
   // ==========================================================================
   // 6. VÁCH NGĂN & NỘI THẤT TẦNG HẦM BÍ MẬT (B1 BASEMENT — y = -6.20)
@@ -523,10 +647,6 @@ export function buildMansionInterior(world, mansionGroup) {
 
   // --- NỘI THẤT HẦM B1.3: PHÒNG THÍ NGHIỆM LÕI & BỂ CHỨA SINH HỌC CỦA CHI (CORE LAB, x: 7..24, z: -24..12) ---
   buildBasementCoreLab(mansionGroup, addLocalCollider, world, 15.5, -6.20, -6.0, steelMat, glassMat, brassMat);
-
-  // Biển chỉ dẫn phát sáng tại Cầu thang chính & Cầu thang phụ B
-  createFloatingSign(mansionGroup, 0, 3.8, -2.8, '▲ CẦU THANG ĐÔI LÊN TẦNG 2 (2F)');
-  createFloatingSign(mansionGroup, -14.0, 3.2, 2.2, '▼ CẦU THANG PHỤ B XUỐNG HẦM THÍ NGHIỆM (B1)');
 }
 
 // ============================================================================
@@ -587,6 +707,57 @@ function createDocumentProp(mansionGroup, world, x, y, z, clueKey, labelText) {
   });
 }
 
+function buildGrandFoyerDetails(group, addCol, world, woodMat, brassMat, rugMat) {
+  const fGroup = new THREE.Group();
+
+  // 1. ĐỒNG HỒ QUẢ LẮC CỔ VICTORIAN (GRANDFATHER CLOCK) ĐẶT CẠNH CẦU THANG ĐÔI
+  const clockGroup = new THREE.Group();
+  clockGroup.position.set(7.15, 0.26, 2.2);
+  clockGroup.rotation.y = -Math.PI / 2;
+
+  const clockBase = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.65, 0.55), woodMat);
+  clockBase.position.y = 0.325;
+  const clockTrunk = new THREE.Mesh(new THREE.BoxGeometry(0.62, 1.45, 0.44), woodMat);
+  clockTrunk.position.y = 1.35;
+  const clockHood = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.75, 0.52), woodMat);
+  clockHood.position.y = 2.45;
+  const clockDial = new THREE.Mesh(
+    new THREE.CircleGeometry(0.26, 16),
+    new THREE.MeshBasicMaterial({ color: 0xf7eed7 })
+  );
+  clockDial.position.set(0, 2.45, 0.27);
+  const pendulum = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.04, 12), brassMat);
+  pendulum.rotation.x = Math.PI / 2;
+  pendulum.position.set(0, 1.25, 0.23);
+  clockGroup.add(clockBase, clockTrunk, clockHood, clockDial, pendulum);
+  fGroup.add(clockGroup);
+  addCol(6.7, 7.6, 0.26, 3.1, 1.7, 2.7, 'grandfather_clock');
+
+  // 2. HAI TỦ CONSOLE GỖ GỤ & CHÂN NẾN ĐỒNG HAI BÊN ĐẠI SẢNH
+  [-7.1, 7.1].forEach((cx, idx) => {
+    const consoleTable = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.92, 2.6), woodMat);
+    consoleTable.position.set(cx, 0.26 + 0.46, 9.2);
+    const candelabra = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.18, 0.55, 10), brassMat);
+    candelabra.position.set(cx, 0.26 + 1.18, 9.2);
+    fGroup.add(consoleTable, candelabra);
+    addCol(cx - 0.5, cx + 0.5, 0.26, 1.4, 7.8, 10.6, `foyer_console_${idx}`);
+  });
+
+  // 3. BỐN CỘT TRỤ GỖ CHẠM KHẮC (PILASTERS) & ĐÈN TƯỜNG ĐỒNG DỌC ĐẠI SẢNH
+  const bulbMat = new THREE.MeshBasicMaterial({ color: 0xffdd99 });
+  [[-7.75, 5.5], [7.75, 5.5], [-7.75, -1.5], [7.75, -1.5]].forEach(([px, pz]) => {
+    const pilaster = new THREE.Mesh(new THREE.BoxGeometry(0.36, 6.8, 0.42), woodMat);
+    pilaster.position.set(px, 0.26 + 3.4, pz);
+    const sconcePlate = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.38, 0.22), brassMat);
+    sconcePlate.position.set(px > 0 ? px - 0.2 : px + 0.2, 3.2, pz);
+    const sconceBulb = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), bulbMat);
+    sconceBulb.position.set(px > 0 ? px - 0.32 : px + 0.32, 3.35, pz);
+    fGroup.add(pilaster, sconcePlate, sconceBulb);
+  });
+
+  group.add(fGroup);
+}
+
 function createRoundTableWithVase(group, addCol, x, y, z, woodMat, brassMat) {
   const tGroup = new THREE.Group();
   tGroup.position.set(x, y, z);
@@ -616,6 +787,7 @@ function buildFireplace(group, addCol, x, y, z, rotY, stoneMat, brassMat) {
   fireGlow.position.set(0, 0.38, 0.25);
   const fireLight = new THREE.PointLight(0xff6622, 6.5, 16);
   fireLight.position.set(0, 0.8, 0.8);
+  registerInteriorLight(fireLight, 'floor1');
 
   fp.add(body, chimney, hearth, fireGlow, fireLight);
   group.add(fp);
@@ -626,18 +798,28 @@ function buildSofaSet(group, addCol, x, y, z, leatherMat, woodMat, rugMat) {
   const sGroup = new THREE.Group();
   sGroup.position.set(x, y, z);
 
-  // Thảm Ba Tư lớn
-  const rug = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.03, 6.4), rugMat);
+  // Thảm Ba Tư lớn dệt hoa văn cổ điển
+  const rug = new THREE.Mesh(new THREE.BoxGeometry(7.6, 0.03, 6.8), rugMat);
   rug.position.y = 0.02;
   sGroup.add(rug);
 
-  // Bàn trà gỗ ở giữa
+  // Bàn trà gỗ ở giữa + Khay ấm trà sứ cổ
   const coffeeTable = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.52, 1.2), woodMat);
   coffeeTable.position.y = 0.26;
-  sGroup.add(coffeeTable);
+  const teaTray = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.32, 0.32, 0.04, 14),
+    new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.8, roughness: 0.25 })
+  );
+  teaTray.position.set(0, 0.54, 0);
+  const teapot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.14, 12, 10),
+    new THREE.MeshStandardMaterial({ color: 0xf5f0e6, roughness: 0.2 })
+  );
+  teapot.position.set(0, 0.66, 0);
+  sGroup.add(coffeeTable, teaTray, teapot);
   addCol(x - 1.1, x + 1.1, y, y + 0.6, z - 0.6, z + 0.6, 'coffee_table');
 
-  // Hai ghế Sofa lớn đối diện nhau
+  // Hai ghế Sofa da Chesterfield lớn đối diện nhau
   [-2.3, 2.3].forEach((sz) => {
     const sofa = new THREE.Group();
     sofa.position.set(0, 0, sz);
@@ -653,6 +835,12 @@ function buildSofaSet(group, addCol, x, y, z, leatherMat, woodMat, rugMat) {
     sGroup.add(sofa);
     addCol(x - 1.6, x + 1.6, y, y + 1.0, z + sz - 0.55, z + sz + 0.55, 'sofa');
   });
+
+  // Tủ trưng bày đồ cổ & Đèn cây đứng góc phòng khách
+  const curioCabinet = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.8, 2.2), woodMat);
+  curioCabinet.position.set(-6.6, 1.4, 0);
+  sGroup.add(curioCabinet);
+  addCol(x - 7.2, x - 6.0, y, y + 2.8, z - 1.1, z + 1.1, 'curio_cabinet');
 
   group.add(sGroup);
 }
@@ -672,6 +860,7 @@ function buildChapelInterior(group, addCol, x, y, z, woodMat, velvetMat, brassMa
   crossH.position.set(0, 2.4, -3.5);
   const chapelLight = new THREE.PointLight(0xffaa44, 5.5, 16);
   chapelLight.position.set(0, 2.8, -2.2);
+  registerInteriorLight(chapelLight, 'floor1');
   cGroup.add(altar, altarCloth, crossV, crossH, chapelLight);
   addCol(x - 1.8, x + 1.8, y, y + 1.5, z - 3.8, z - 2.6, 'altar');
 
@@ -701,27 +890,31 @@ function buildConservatoryRoom(group, addCol, world, x, y, z, woodMat, glassMat)
   // Ánh sáng sinh học xanh trắng ma mị của Nhà Kính Hoa Phục Sinh
   const bioLight = new THREE.PointLight(0x66ffcc, 6.0, 18);
   bioLight.position.set(0, 3.2, 0);
+  registerInteriorLight(bioLight, 'floor1');
   gGroup.add(bioLight);
 
-  // 2 Bồn trồng Hoa Phục Sinh (Resurrection Flowers) phát sáng
+  // 2 Bồn trồng Hoa Phục Sinh (Resurrection Flowers) phát sáng (Kích thước chuẩn với phòng Nhà Kính x: -24..-16.2)
   const flowerMat = new THREE.MeshBasicMaterial({ color: 0xd8fff4 });
+  const redCoreMat = new THREE.MeshBasicMaterial({ color: 0xff1133 });
   const stemMat = new THREE.MeshStandardMaterial({ color: 0x1b4d2e, roughness: 0.8 });
 
-  [-3.2, 3.2].forEach((bx) => {
-    const planter = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.75, 5.2), woodMat);
-    planter.position.set(bx, 0.38, 0);
+  [-1.8, 1.8].forEach((bx) => {
+    const planter = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.78, 5.4), woodMat);
+    planter.position.set(bx, 0.39, 0);
     gGroup.add(planter);
-    addCol(x + bx - 1.1, x + bx + 1.1, y, y + 0.9, z - 2.6, z + 2.6, 'planter');
+    addCol(x + bx - 0.85, x + bx + 0.85, y, y + 0.9, z - 2.7, z + 2.7, 'planter');
 
-    for (let f = 0; f < 10; f++) {
-      const fx = bx + (Math.random() - 0.5) * 1.4;
-      const fz = (Math.random() - 0.5) * 4.2;
+    for (let f = 0; f < 12; f++) {
+      const fx = bx + (Math.random() - 0.5) * 1.1;
+      const fz = (Math.random() - 0.5) * 4.4;
       const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.04, 0.65, 6), stemMat);
       stem.position.set(fx, 1.05, fz);
       const blossom = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 10), flowerMat);
-      blossom.scale.set(1.2, 0.7, 1.2);
+      blossom.scale.set(1.25, 0.65, 1.25);
       blossom.position.set(fx, 1.4, fz);
-      gGroup.add(stem, blossom);
+      const core = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 6), redCoreMat);
+      core.position.set(fx, 1.46, fz);
+      gGroup.add(stem, blossom, core);
     }
   });
 
@@ -738,39 +931,55 @@ function buildConservatoryRoom(group, addCol, world, x, y, z, woodMat, glassMat)
   });
 }
 
-function buildLibraryRoom(group, addCol, world, x, y, z, woodMat, leatherMat, brassMat) {
+function buildLibraryRoom(group, addCol, world, x, y, z, woodMat, leatherMat, brassMat, bookshelfMat, rugMat) {
   const lGroup = new THREE.Group();
   lGroup.position.set(x, y, z);
 
-  const libLight = new THREE.PointLight(0xffaa55, 6.5, 20);
-  libLight.position.set(0, 4.2, 0);
+  const libLight = new THREE.PointLight(0xffaa55, 7.0, 22);
+  libLight.position.set(0, 4.4, 0);
+  registerInteriorLight(libLight, 'floor1');
   lGroup.add(libLight);
 
-  // 4 Dãy kệ sách gỗ sồi cao kịch trần
-  const bookColors = [0x6b1d1d, 0x1d3b5c, 0x244728, 0x5c431d];
-  [-6.8, 6.8].forEach((sx) => {
-    const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.9, 5.2, 12.0), woodMat);
-    shelf.position.set(sx, 2.6, 0);
-    lGroup.add(shelf);
-    addCol(x + sx - 0.5, x + sx + 0.5, y, y + 5.2, z - 6.0, z + 6.0, 'bookshelf');
+  // Thảm Ba Tư cổ dưới bàn đọc sách Thư Viện
+  if (rugMat) {
+    const libRug = new THREE.Mesh(new THREE.BoxGeometry(8.5, 0.03, 9.5), rugMat);
+    libRug.position.set(0, 0.02, 0);
+    lGroup.add(libRug);
+  }
 
-    // Các hàng sách màu cổ điển trên kệ
-    for (let row = 0; row < 5; row++) {
-      const bookRow = new THREE.Mesh(
-        new THREE.BoxGeometry(0.96, 0.42, 11.2),
-        new THREE.MeshStandardMaterial({ color: bookColors[row % bookColors.length], roughness: 0.75 })
-      );
-      bookRow.position.set(sx, 0.8 + row * 0.95, 0);
-      lGroup.add(bookRow);
-    }
+  // Các dãy Tủ Sách Gỗ Sồi Cao Kịch Trần có Texture hàng trăm gáy sách da cổ điển (0% lag!)
+  const shelfMatToUse = bookshelfMat || woodMat;
+  [-6.8, 6.8].forEach((sx) => {
+    const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.95, 5.4, 12.5), shelfMatToUse);
+    shelf.position.set(sx, 2.7, 0);
+    lGroup.add(shelf);
+    addCol(x + sx - 0.55, x + sx + 0.55, y, y + 5.4, z - 6.25, z + 6.25, 'bookshelf');
   });
 
-  // Bàn đọc sách lớn ở trung tâm Thư Viện
+  // Tủ sách lớn áp tường Bắc của Thư Viện
+  const backShelf = new THREE.Mesh(new THREE.BoxGeometry(11.5, 5.4, 0.95), shelfMatToUse);
+  backShelf.position.set(0, 2.7, -7.2);
+  lGroup.add(backShelf);
+  addCol(x - 5.75, x + 5.75, y, y + 5.4, z - 7.7, z - 6.7, 'back_bookshelf');
+
+  // Quả địa cầu cổ bằng đồng (Antique Brass Globe) cạnh bàn đọc sách
+  const globeStand = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.28, 0.95, 10), brassMat);
+  globeStand.position.set(-2.6, 0.48, -1.2);
+  const globeSphere = new THREE.Mesh(
+    new THREE.SphereGeometry(0.34, 14, 14),
+    new THREE.MeshStandardMaterial({ color: 0xc8a464, roughness: 0.4, metalness: 0.3 })
+  );
+  globeSphere.position.set(-2.6, 1.15, -1.2);
+  lGroup.add(globeStand, globeSphere);
+
+  // Bàn đọc sách lớn ở trung tâm Thư Viện + Ghế bành da
   const desk = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.85, 1.8), woodMat);
   desk.position.set(0, 0.42, 0);
   const bankerLamp = new THREE.Mesh(new THREE.ConeGeometry(0.28, 0.25, 12), new THREE.MeshBasicMaterial({ color: 0x22cc66 }));
   bankerLamp.position.set(-1.1, 1.15, -0.4);
-  lGroup.add(desk, bankerLamp);
+  const chair = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.2, 0.9), leatherMat);
+  chair.position.set(0, 0.6, -1.35);
+  lGroup.add(desk, bankerLamp, chair);
   addCol(x - 1.7, x + 1.7, y, y + 0.95, z - 0.9, z + 0.9, 'library_desk');
 
   group.add(lGroup);
@@ -793,6 +1002,7 @@ function buildKitchenRoom(group, addCol, x, y, z, steelMat, woodMat, bloodMat) {
 
   const kLight = new THREE.PointLight(0xddeeff, 5.0, 16);
   kLight.position.set(0, 4.0, 0);
+  registerInteriorLight(kLight, 'floor1');
   kGroup.add(kLight);
 
   // Bàn sơ chế inox ở giữa bếp có vết máu tươi
@@ -818,6 +1028,7 @@ function buildGrandDiningHall(group, addCol, x, y, z, woodMat, velvetMat, brassM
 
   const dLight = new THREE.PointLight(0xff9944, 7.0, 24);
   dLight.position.set(0, 4.8, 0);
+  registerInteriorLight(dLight, 'floor1');
   dGroup.add(dLight);
 
   // Bàn tiệc đại sảnh dài 10m
@@ -852,59 +1063,155 @@ function buildGrandDiningHall(group, addCol, x, y, z, woodMat, velvetMat, brassM
   group.add(dGroup);
 }
 
-function buildFamilyLounge2F(group, addCol, world, x, y, z, woodMat, velvetMat, brassMat) {
+function buildFamilyLounge2F(group, addCol, world, x, y, z, woodMat, velvetMat, brassMat, leatherMat) {
   const fGroup = new THREE.Group();
   fGroup.position.set(x, y, z);
 
-  const lLight = new THREE.PointLight(0xffbb66, 6.0, 18);
-  lLight.position.set(0, 4.2, 0);
+  const lLight = new THREE.PointLight(0xffbb66, 6.8, 22);
+  lLight.position.set(0, 4.4, 0);
+  registerInteriorLight(lLight, 'floor2');
   fGroup.add(lLight);
 
-  // Đàn Dương Cầm Cổ (Grand Piano)
-  const piano = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.95, 2.6), woodMat);
-  piano.position.set(-3.2, 0.48, 0);
-  fGroup.add(piano);
-  addCol(x - 4.3, x - 2.1, y, y + 1.1, z - 1.3, z + 1.3, 'piano');
+  // Thảm Ba Tư cổ điển trải giữa Phòng Sinh Hoạt Gia Đình Tầng 2
+  const loungeRug = new THREE.Mesh(new THREE.BoxGeometry(9.2, 0.03, 10.5), velvetMat);
+  loungeRug.position.set(0, 0.02, -2.5);
+  fGroup.add(loungeRug);
 
-  // BỨC TRANH SƠN DẦU GIA ĐÌNH HẠNH PHÚC (Trên tường Bắc z = -9.6 của phòng)
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(4.2, 2.8, 0.16), brassMat);
-  frame.position.set(0, 2.6, -9.6);
-  const paintTex = createFamilyPaintingTexture();
-  const canvasMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(3.8, 2.4),
-    new THREE.MeshBasicMaterial({ map: paintTex })
+  // Đàn Dương Cầm Cổ (Grand Piano + Phím đàn trắng đen + Ghế ngồi)
+  const piano = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.95, 2.6), woodMat);
+  piano.position.set(-3.6, 0.48, -1.5);
+  const keyboard = new THREE.Mesh(
+    new THREE.BoxGeometry(0.32, 0.08, 1.45),
+    new THREE.MeshBasicMaterial({ color: 0xf8f6f0 })
   );
-  canvasMesh.position.set(0, 2.6, -9.5);
-  fGroup.add(frame, canvasMesh);
+  keyboard.position.set(-2.45, 0.82, -1.5);
+  const pianoBench = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.5, 1.1), woodMat);
+  pianoBench.position.set(-1.85, 0.25, -1.5);
+  fGroup.add(piano, keyboard, pianoBench);
+  addCol(x - 4.7, x - 2.5, y, y + 1.1, z - 2.8, z - 0.2, 'piano');
+
+  // Bộ ghế bành thưởng trà & Máy hát đĩa than cổ (Gramophone) bên phải phòng
+  const gramTable = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 0.65, 0.78, 14), woodMat);
+  gramTable.position.set(3.8, 0.39, -3.2);
+  const gramHorn = new THREE.Mesh(new THREE.ConeGeometry(0.38, 0.55, 12, 1, true), brassMat);
+  gramHorn.rotation.z = 0.65;
+  gramHorn.position.set(3.65, 1.12, -3.2);
+  fGroup.add(gramTable, gramHorn);
+  addCol(x + 3.1, x + 4.5, y, y + 1.2, z - 3.9, z - 2.5, 'gramophone');
+
+  if (leatherMat) {
+    [-5.2, -1.5].forEach((az) => {
+      const armchair = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.95, 1.1), leatherMat);
+      armchair.position.set(3.8, 0.48, az);
+      fGroup.add(armchair);
+      addCol(x + 3.2, x + 4.4, y, y + 1.0, z + az - 0.55, z + az + 0.55, 'lounge_chair');
+    });
+  }
+
+  // ============================================================================
+  // BỨC CHÂN DUNG THẬT CỦA GIA ĐÌNH ÔNG BÌNH ("GIA ĐÌNH CHÚNG TÔI - NĂM 1998")
+  // Sử dụng trực tiếp ảnh thật /family.png trong thư mục public!
+  // ============================================================================
+  const portraitGroup = new THREE.Group();
+  portraitGroup.position.set(0, 3.15, -9.62);
+
+  // Khung gỗ 3D dày tạo chiều sâu nổi khối trên tường Bắc Tầng 2 (Tỷ lệ chuẩn 3:4 theo khung tranh trong ảnh family.png)
+  const outerWoodBacking = new THREE.Mesh(new THREE.BoxGeometry(2.86, 3.76, 0.16), woodMat);
+  const brassInnerTrim = new THREE.Mesh(new THREE.BoxGeometry(2.74, 3.64, 0.19), brassMat);
+  portraitGroup.add(outerWoodBacking, brassInnerTrim);
+
+  // Tải ảnh thật /family.png từ thư mục public và cắt UV chuẩn theo viền khung gỗ cổ trong ảnh (loại bỏ nền bàn mờ & watermark góc phải)
+  const texLoader = new THREE.TextureLoader();
+  const familyPhotoTex = texLoader.load('/family.png');
+  familyPhotoTex.colorSpace = THREE.SRGBColorSpace;
+  familyPhotoTex.offset.set(0.168, 0.058);
+  familyPhotoTex.repeat.set(0.667, 0.884);
+
+  const portraitMat = new THREE.MeshStandardMaterial({
+    map: familyPhotoTex,
+    emissiveMap: familyPhotoTex,
+    emissive: new THREE.Color(0xffffff),
+    emissiveIntensity: 0.38,
+    roughness: 0.42,
+    metalness: 0.08
+  });
+
+  const canvasMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(2.66, 3.52),
+    portraitMat
+  );
+  canvasMesh.position.set(0, 0, 0.105);
+  portraitGroup.add(canvasMesh);
+
+  // Đèn rọi tranh bằng đồng thau (Gallery Picture Lamp) gắn phía trên đỉnh khung tranh
+  const lampArm = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.45), brassMat);
+  lampArm.position.set(0, 1.96, 0.22);
+  const lampShade = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 0.95, 10), brassMat);
+  lampShade.rotation.z = Math.PI / 2;
+  lampShade.position.set(0, 1.92, 0.42);
+  portraitGroup.add(lampArm, lampShade);
+
+  fGroup.add(portraitGroup);
 
   group.add(fGroup);
 
+  // Cho phép bấm [E] để ngắm cận cảnh bức ảnh thật "GIA ĐÌNH CHÚNG TÔI - NĂM 1998" và đọc suy luận của Sĩ quan An
+  const familyPortraitDoc = {
+    title: 'BỨC CHÂN DUNG GIA ĐÌNH ÔNG BÌNH (NĂM 1998)',
+    code: 'PORTRAIT-1998 // PHÒNG SINH HOẠT CHUNG TẦNG 2',
+    pages: [
+      {
+        heading: 'KHUNG ẢNH KỶ NIỆM: "GIA ĐÌNH CHÚNG TÔI — NĂM 1998"',
+        meta: 'Vị trí: Bức tường chính Phòng Sinh Hoạt Gia Đình (Tầng 2) • Tình trạng: Được lau chùi cẩn thận',
+        body: `
+          <div style="text-align:center; margin: 10px 0 16px 0;">
+            <img src="/family.png" alt="Gia Đình Ông Bình Năm 1998" style="max-width: 340px; width: 100%; border-radius: 6px; border: 3px solid #6b4c2b; box-shadow: 0 8px 24px rgba(0,0,0,0.45);" />
+          </div>
+          <p><strong>QUAN SÁT CỦA SĨ QUAN AN:</strong> Bức chân dung gia đình chụp vào <strong>Năm 1998</strong> được đóng trong khung gỗ sồi cổ kính có gắn bảng đồng khắc dòng chữ <em>"GIA ĐÌNH CHÚNG TÔI — NĂM 1998"</em>.</p>
+          <p>Trong ảnh, <strong>Ông Bình</strong> mặc bộ vest nâu lịch lãm đứng bên trái, người vợ dịu dàng đứng bên phải, cả hai cùng đặt tay lên vai cô con gái nhỏ <strong>Linh Chi</strong> với mái tóc xanh đặc trưng ngồi ở chính giữa.</p>
+          <p><em>"Đây là những năm tháng bình yên cuối cùng của họ trước khi căn bệnh quái ác ập đến và cuốn Ông Bình vào giao ước đẫm máu với Tập đoàn Dược phẩm Nexus..."</em></p>
+        `,
+        stamp: 'KỶ VẬT GIA ĐÌNH'
+      }
+    ]
+  };
+
   world.interactables.push({
-    mesh: frame,
-    label: '[E] Ngắm bức tranh sơn dầu "Gia Đình Ông Bình & Chi Dưới Nắng Ấm"',
-    distance: 5.0,
+    mesh: outerWoodBacking,
+    label: '[E] Ngắm bức chân dung "Gia Đình Chúng Tôi — Năm 1998" (Tầng 2)',
+    distance: 5.5,
     onInteract: () => {
       audioManager.playPageTurn();
-      world.showNotification('🖼️ Bức tranh vẽ Chi mặc váy trắng mỉm cười rạng rỡ bên cha mẹ dưới vườn hoa đầy nắng. Phía dưới khung tranh khắc dòng chữ: "Con gái yêu dấu Linh Chi — Ánh sáng duy nhất của ba mẹ".');
+      playerInventory.openCaseFileModal(familyPortraitDoc);
+      world.showNotification('🖼️ Đang xem bức chân dung "GIA ĐÌNH CHÚNG TÔI — NĂM 1998" tại Phòng Sinh Hoạt Gia Đình Tầng 2.');
     }
   });
 }
 
-function buildBinhStudy2F(group, addCol, world, x, y, z, woodMat, leatherMat, brassMat) {
+function buildBinhStudy2F(group, addCol, world, x, y, z, woodMat, leatherMat, brassMat, bookshelfMat) {
   const bGroup = new THREE.Group();
   bGroup.position.set(x, y, z);
 
-  const sLight = new THREE.PointLight(0xffaa44, 5.5, 16);
-  sLight.position.set(0, 3.8, 0);
+  const sLight = new THREE.PointLight(0xffaa44, 6.0, 18);
+  sLight.position.set(0, 4.0, 0);
+  registerInteriorLight(sLight, 'floor2');
   bGroup.add(sLight);
 
-  // Bàn làm việc của Ông Bình
-  const desk = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.85, 1.5), woodMat);
+  // Bàn làm việc lớn của Ông Bình + Đèn bàn + Ghế Giám Đốc
+  const desk = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.85, 1.6), woodMat);
   desk.position.set(0, 0.42, 0);
-  const chair = new THREE.Mesh(new THREE.BoxGeometry(0.85, 1.25, 0.85), leatherMat);
-  chair.position.set(0, 0.62, -1.2);
-  bGroup.add(desk, chair);
-  addCol(x - 1.5, x + 1.5, y, y + 0.95, z - 0.8, z + 0.8, 'binh_desk');
+  const chair = new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.25, 0.9), leatherMat);
+  chair.position.set(0, 0.62, -1.25);
+  const lamp = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.22, 10), brassMat);
+  lamp.position.set(1.0, 1.1, -0.35);
+  bGroup.add(desk, chair, lamp);
+  addCol(x - 1.6, x + 1.6, y, y + 0.95, z - 0.85, z + 0.85, 'binh_desk');
+
+  // Tủ sách hồ sơ y khoa & Két sắt bí mật sát tường Tây
+  const studyShelf = new THREE.Mesh(new THREE.BoxGeometry(0.9, 4.8, 7.5), bookshelfMat || woodMat);
+  studyShelf.position.set(-6.8, 2.4, 0);
+  bGroup.add(studyShelf);
+  addCol(x - 7.3, x - 6.3, y, y + 4.8, z - 3.8, z + 3.8, 'study_bookshelf');
 
   group.add(bGroup);
 
@@ -924,53 +1231,86 @@ function buildMasterBedroom2F(group, addCol, x, y, z, woodMat, velvetMat, brassM
   const mGroup = new THREE.Group();
   mGroup.position.set(x, y, z);
 
-  const mLight = new THREE.PointLight(0xff9955, 5.0, 18);
-  mLight.position.set(0, 4.0, 0);
+  const mLight = new THREE.PointLight(0xff9955, 5.8, 20);
+  mLight.position.set(0, 4.2, 0);
+  registerInteriorLight(mLight, 'floor2');
   mGroup.add(mLight);
 
-  // Giường 4 cọc hoàng gia (Four-Poster Canopy Bed)
-  const mattress = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.68, 3.8), velvetMat);
-  mattress.position.set(-2.5, 0.34, 0);
-  const headboard = new THREE.Mesh(new THREE.BoxGeometry(0.28, 2.4, 3.8), woodMat);
-  headboard.position.set(-4.0, 1.2, 0);
-  const canopy = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.18, 4.0), velvetMat);
-  canopy.position.set(-2.5, 3.2, 0);
+  // Thảm trải phòng ngủ chính
+  const bedRug = new THREE.Mesh(new THREE.BoxGeometry(7.5, 0.03, 8.5), velvetMat);
+  bedRug.position.set(-1.2, 0.02, 0);
+  mGroup.add(bedRug);
+
+  // Giường 4 cọc hoàng gia (Four-Poster Canopy Bed) + Gối lụa
+  const mattress = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.68, 3.8), velvetMat);
+  mattress.position.set(-3.2, 0.34, 0);
+  const headboard = new THREE.Mesh(new THREE.BoxGeometry(0.28, 2.5, 3.8), woodMat);
+  headboard.position.set(-4.8, 1.25, 0);
+  const canopy = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.18, 4.0), velvetMat);
+  canopy.position.set(-3.2, 3.3, 0);
+  const pillowMat = new THREE.MeshStandardMaterial({ color: 0xf5efe6, roughness: 0.6 });
+  [-0.95, 0.95].forEach((pz) => {
+    const pillow = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.16, 1.1), pillowMat);
+    pillow.position.set(-4.2, 0.76, pz);
+    mGroup.add(pillow);
+  });
   mGroup.add(mattress, headboard, canopy);
 
-  [[-4.0, -1.8], [-4.0, 1.8], [-1.0, -1.8], [-1.0, 1.8]].forEach(([px, pz]) => {
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 3.2, 8), woodMat);
-    post.position.set(px, 1.6, pz);
+  [[-4.8, -1.8], [-4.8, 1.8], [-1.6, -1.8], [-1.6, 1.8]].forEach(([px, pz]) => {
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 3.3, 8), woodMat);
+    post.position.set(px, 1.65, pz);
     mGroup.add(post);
   });
-  addCol(x - 4.2, x - 0.8, y, y + 2.5, z - 1.9, z + 1.9, 'master_bed');
+  addCol(x - 5.0, x - 1.5, y, y + 2.5, z - 1.9, z + 1.9, 'master_bed');
 
-  // Tủ quần áo cổ lớn
-  const wardrobe = new THREE.Mesh(new THREE.BoxGeometry(2.4, 3.2, 1.1), woodMat);
-  wardrobe.position.set(2.5, 1.6, -6.5);
+  // 2 Tủ đầu giường (Nightstands) + Tủ quần áo cổ lớn + Bàn trang điểm có gương
+  [-2.6, 2.6].forEach((nz) => {
+    const nightstand = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.72, 0.8), woodMat);
+    nightstand.position.set(-4.5, 0.36, nz);
+    const lamp = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.22, 0.42, 10), brassMat);
+    lamp.position.set(-4.5, 0.92, nz);
+    mGroup.add(nightstand, lamp);
+  });
+
+  const wardrobe = new THREE.Mesh(new THREE.BoxGeometry(2.6, 3.4, 1.15), woodMat);
+  wardrobe.position.set(2.5, 1.7, -8.5);
   mGroup.add(wardrobe);
-  addCol(x + 1.3, x + 3.7, y, y + 3.2, z - 7.1, z - 5.9, 'wardrobe');
+  addCol(x + 1.2, x + 3.8, y, y + 3.4, z - 9.1, z - 7.9, 'wardrobe');
 
   group.add(mGroup);
 }
 
-function buildChiBedroom2F(group, addCol, x, y, z, woodMat, brassMat) {
+function buildChiBedroom2F(group, addCol, x, y, z, woodMat, brassMat, rugMat) {
   const cGroup = new THREE.Group();
   cGroup.position.set(x, y, z);
 
-  const cLight = new THREE.PointLight(0xffccaa, 5.0, 15);
-  cLight.position.set(0, 3.8, 0);
+  const cLight = new THREE.PointLight(0xffccaa, 5.8, 18);
+  cLight.position.set(0, 4.0, 0);
+  registerInteriorLight(cLight, 'floor2');
   cGroup.add(cLight);
 
-  // Giường trắng của Chi
+  if (rugMat) {
+    const rug = new THREE.Mesh(new THREE.BoxGeometry(5.5, 0.03, 5.5), rugMat);
+    rug.position.set(0.5, 0.02, 0);
+    cGroup.add(rug);
+  }
+
+  // Giường trắng của Chi + Đầu giường gỗ chạm khắc + Bàn trang điểm & Hộp Nhạc Đồng
   const whiteMat = new THREE.MeshStandardMaterial({ color: 0xeee8e0, roughness: 0.7 });
-  const bed = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.62, 3.0), whiteMat);
-  bed.position.set(2.8, 0.31, 0);
-  const table = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.78, 1.2), woodMat);
-  table.position.set(-2.2, 0.39, 1.5);
-  const musicBox = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.25, 0.28), brassMat);
-  musicBox.position.set(-2.2, 0.9, 1.5);
-  cGroup.add(bed, table, musicBox);
-  addCol(x + 1.6, x + 4.0, y, y + 0.9, z - 1.5, z + 1.5, 'chi_bed');
+  const bed = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.65, 3.2), whiteMat);
+  bed.position.set(3.2, 0.325, 0);
+  const headboard = new THREE.Mesh(new THREE.BoxGeometry(0.24, 1.85, 3.2), woodMat);
+  headboard.position.set(4.45, 0.92, 0);
+  const table = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.8, 1.2), woodMat);
+  table.position.set(-2.5, 0.4, 1.5);
+  const musicBox = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.26, 0.3), brassMat);
+  musicBox.position.set(-2.5, 0.93, 1.5);
+  const wardrobe = new THREE.Mesh(new THREE.BoxGeometry(2.0, 3.0, 1.0), woodMat);
+  wardrobe.position.set(0.5, 1.5, 3.8);
+  cGroup.add(bed, headboard, table, musicBox, wardrobe);
+  addCol(x + 1.9, x + 4.6, y, y + 1.1, z - 1.6, z + 1.6, 'chi_bed');
+  addCol(x - 3.2, x - 1.8, y, y + 0.95, z + 0.9, z + 2.1, 'chi_table');
+  addCol(x - 0.5, x + 1.5, y, y + 3.0, z + 3.3, z + 4.3, 'chi_wardrobe');
 
   group.add(cGroup);
 }
@@ -981,6 +1321,7 @@ function buildTreatmentRoom2F(group, addCol, world, x, y, z, steelMat, bloodMat)
 
   const medLight = new THREE.PointLight(0xaaddff, 5.5, 16);
   medLight.position.set(0, 3.8, 0);
+  registerInteriorLight(medLight, 'floor2');
   tGroup.add(medLight);
 
   // Giường bệnh y tế dính máu và giá treo truyền dịch IV
@@ -1016,6 +1357,7 @@ function buildIsolationRoom2F(group, addCol, world, x, y, z, steelMat, bloodMat)
 
   const redLight = new THREE.PointLight(0xff2222, 6.0, 16);
   redLight.position.set(0, 3.8, 0);
+  registerInteriorLight(redLight, 'floor2');
   iGroup.add(redLight);
 
   // Song sắt nhà giam cách ly bị bẻ cong ở giữa phòng
@@ -1051,6 +1393,7 @@ function buildBasementWestWing(group, addCol, world, x, y, z, woodMat, steelMat)
 
   const bLight = new THREE.PointLight(0xffaa55, 5.5, 20);
   bLight.position.set(0, 4.2, -6.0);
+  registerInteriorLight(bLight, 'basement');
   wGroup.add(bLight);
 
   // Các thùng gỗ ủ rượu vang lớn (Old Wine Cellar)
@@ -1090,6 +1433,8 @@ function buildBasementMainLab(group, addCol, world, x, y, z, steelMat, glassMat,
   labLight1.position.set(0, 4.8, 4.0);
   const labLight2 = new THREE.PointLight(0x88ddff, 7.0, 24);
   labLight2.position.set(0, 4.8, -8.0);
+  registerInteriorLight(labLight1, 'basement');
+  registerInteriorLight(labLight2, 'basement');
   lGroup.add(labLight1, labLight2);
 
   // 2 Bàn thí nghiệm inox lớn + giá ống nghiệm phát sáng đỏ
@@ -1172,6 +1517,7 @@ function buildBasementCoreLab(group, addCol, world, x, y, z, steelMat, glassMat,
 
   const coreLight = new THREE.PointLight(0x00eeff, 12.0, 28);
   coreLight.position.set(0, 3.0, 0);
+  registerInteriorLight(coreLight, 'basement');
 
   cGroup.add(basePedestal, topCap, fluidCylinder, outerGlass, coreLight);
   addCol(x - 2.5, x + 2.5, y, y + 5.5, z - 2.5, z + 2.5, 'containment_tank');
@@ -1230,8 +1576,278 @@ function createFloatingSign(group, x, y, z, text) {
 }
 
 // ============================================================================
-// PROCEDURAL TEXTURES CHO SÀN ĐÁ MARBLE, SÀN GỖ SỒI, SÀN LAB & TRANH GIA ĐÌNH
+// PROCEDURAL TEXTURES CHO TƯỜNG VICTORIAN WAINSCOTING, KỆ SÁCH, THẢM BA TƯ & SÀN NHÀ
+// (Tạo độ chi tiết kiến trúc cực cao mà KHÔNG tốn thêm bất kỳ đa giác hay draw call nào!)
 // ============================================================================
+function createVictorianWallpaperTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+
+  // 1. Phần trên (y = 0 .. 340): Giấy dán tường hoa văn Damask cổ điển tông nâu đỏ trầm
+  const wallGrad = ctx.createLinearGradient(0, 0, 0, 340);
+  wallGrad.addColorStop(0, '#2e1d1a');
+  wallGrad.addColorStop(0.5, '#3d2520');
+  wallGrad.addColorStop(1, '#2b1916');
+  ctx.fillStyle = wallGrad;
+  ctx.fillRect(0, 0, 512, 340);
+
+  // Sọc dọc cổ điển và họa tiết kim cương Damask mạ vàng mờ
+  ctx.strokeStyle = 'rgba(212, 175, 55, 0.14)';
+  ctx.lineWidth = 2;
+  for (let x = 16; x < 512; x += 32) {
+    ctx.beginPath();
+    ctx.moveTo(x, 24);
+    ctx.lineTo(x, 326);
+    ctx.stroke();
+  }
+  ctx.fillStyle = 'rgba(180, 130, 60, 0.12)';
+  for (let gy = 48; gy < 310; gy += 56) {
+    for (let gx = 32; gx < 512; gx += 64) {
+      ctx.beginPath();
+      ctx.moveTo(gx, gy - 14);
+      ctx.lineTo(gx + 12, gy);
+      ctx.lineTo(gx, gy + 14);
+      ctx.lineTo(gx - 12, gy);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  // Phào chỉ trần nhà trên cùng (Crown Molding)
+  ctx.fillStyle = '#221109';
+  ctx.fillRect(0, 0, 512, 22);
+  ctx.fillStyle = '#8c6b32';
+  ctx.fillRect(0, 20, 512, 4);
+
+  // 2. Đường gờ gỗ ngang lưng tường (Chair Rail Molding tại y = 334..352)
+  ctx.fillStyle = '#1f0f07';
+  ctx.fillRect(0, 334, 512, 18);
+  ctx.fillStyle = '#b58d3d';
+  ctx.fillRect(0, 338, 512, 4);
+
+  // 3. Phần dưới (y = 352 .. 512): Ốp gỗ Pano chạm khắc (Mahogany Wainscoting Panels)
+  ctx.fillStyle = '#26130a';
+  ctx.fillRect(0, 352, 512, 160);
+
+  for (let px = 12; px < 512; px += 124) {
+    ctx.fillStyle = '#1b0c05';
+    ctx.fillRect(px, 366, 104, 118);
+    ctx.strokeStyle = '#542d18';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(px + 4, 370, 96, 110);
+    ctx.strokeStyle = 'rgba(212, 175, 55, 0.35)';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(px + 12, 378, 80, 94);
+  }
+
+  // Len chân tường dưới cùng (Baseboard)
+  ctx.fillStyle = '#140904';
+  ctx.fillRect(0, 492, 512, 20);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.repeat.set(4, 1);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function createBasementLabWallTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+
+  // Nền gạch bê tông ngầm màu xám lạnh
+  ctx.fillStyle = '#263036';
+  ctx.fillRect(0, 0, 512, 512);
+
+  ctx.strokeStyle = '#182024';
+  ctx.lineWidth = 3;
+  for (let y = 0; y < 360; y += 45) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(512, y);
+    ctx.stroke();
+    const offset = (y / 45) % 2 === 0 ? 0 : 45;
+    for (let x = offset; x < 512; x += 90) {
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x, y + 45);
+      ctx.stroke();
+    }
+  }
+
+  // Vạch cảnh báo sinh học vàng-đen chạy ngang lưng tường hầm
+  ctx.fillStyle = '#d4a017';
+  ctx.fillRect(0, 355, 512, 22);
+  ctx.fillStyle = '#111518';
+  for (let sx = -32; sx < 512; sx += 32) {
+    ctx.beginPath();
+    ctx.moveTo(sx, 355);
+    ctx.lineTo(sx + 16, 355);
+    ctx.lineTo(sx + 4, 377);
+    ctx.lineTo(sx - 12, 377);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Chân tường ốp thép không gỉ dưới hầm
+  ctx.fillStyle = '#1c2429';
+  ctx.fillRect(0, 377, 512, 135);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.repeat.set(4, 1);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function createPersianRugTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#5c0c14';
+  ctx.fillRect(0, 0, 256, 256);
+
+  // Viền thảm thêu vàng kim & xanh đen
+  ctx.strokeStyle = '#d4af37';
+  ctx.lineWidth = 8;
+  ctx.strokeRect(10, 10, 236, 236);
+  ctx.strokeStyle = '#1b162a';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(22, 22, 212, 212);
+  ctx.strokeStyle = '#c89b3c';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(32, 32, 192, 192);
+
+  // Hoa văn Medallion cổ điển ở tâm thảm
+  ctx.fillStyle = '#3b070c';
+  ctx.beginPath();
+  ctx.moveTo(128, 52);
+  ctx.lineTo(192, 128);
+  ctx.lineTo(128, 204);
+  ctx.lineTo(64, 128);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#d4af37';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function createBookshelfTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+
+  ctx.fillStyle = '#1e0e06';
+  ctx.fillRect(0, 0, 512, 512);
+
+  const bookColors = ['#6e1818', '#183254', '#1f4226', '#5c3c16', '#3d1c47', '#4a2512', '#263840'];
+  const rows = 5;
+  const rowH = 512 / rows;
+
+  for (let r = 0; r < rows; r++) {
+    const shelfY = (r + 1) * rowH - 14;
+    // Tấm ván kệ gỗ ngang
+    ctx.fillStyle = '#381b0c';
+    ctx.fillRect(0, shelfY, 512, 14);
+    ctx.fillStyle = '#542a14';
+    ctx.fillRect(0, shelfY, 512, 3);
+
+    // Hàng sách xếp sát nhau trên từng tầng kệ
+    let bx = 8;
+    while (bx < 496) {
+      const bw = 12 + Math.floor(Math.random() * 14);
+      const bh = rowH - 22 - Math.floor(Math.random() * 12);
+      const by = shelfY - bh;
+      ctx.fillStyle = bookColors[(bx + r) % bookColors.length];
+      ctx.fillRect(bx, by, bw - 2, bh);
+
+      // Gáy sách mạ vàng
+      ctx.fillStyle = '#d4af37';
+      ctx.fillRect(bx + 2, by + 8, bw - 6, 2);
+      ctx.fillRect(bx + 2, by + bh - 12, bw - 6, 2);
+      bx += bw;
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.repeat.set(3, 1);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function createInteriorDoorTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+
+  // Nền gỗ Gụ (Rich Victorian Mahogany)
+  const bgGrad = ctx.createLinearGradient(0, 0, 256, 512);
+  bgGrad.addColorStop(0, '#3d1e10');
+  bgGrad.addColorStop(0.5, '#4b2615');
+  bgGrad.addColorStop(1, '#2f160b');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, 256, 512);
+
+  // Vân gỗ tự nhiên chạy dọc
+  ctx.strokeStyle = 'rgba(20, 8, 3, 0.32)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 48; i++) {
+    const x = (i / 48) * 256;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.bezierCurveTo(x + 8, 170, x - 8, 340, x, 512);
+    ctx.stroke();
+  }
+
+  // Viền khung bao cánh cửa
+  ctx.strokeStyle = '#1e0d06';
+  ctx.lineWidth = 10;
+  ctx.strokeRect(5, 5, 246, 502);
+
+  // Hàm vẽ ô Pano chạm khắc âm nổi (Beveled Recessed Panel)
+  const drawCarvedPanel = (x, y, w, h) => {
+    ctx.fillStyle = '#2a1309';
+    ctx.fillRect(x, y, w, h);
+
+    ctx.strokeStyle = '#6b3b20';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(x + 4, y + 4, w - 8, h - 8);
+
+    ctx.fillStyle = '#381b0e';
+    ctx.fillRect(x + 12, y + 12, w - 24, h - 24);
+
+    ctx.strokeStyle = '#d4af37';
+    ctx.lineWidth = 1.2;
+    ctx.strokeRect(x + 14, y + 14, w - 28, h - 28);
+  };
+
+  // 2 Ô Pano lớn phía trên & 2 Ô Pano phía dưới
+  drawCarvedPanel(26, 32, 88, 210);
+  drawCarvedPanel(142, 32, 88, 210);
+  drawCarvedPanel(26, 280, 88, 185);
+  drawCarvedPanel(142, 280, 88, 185);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 function createCheckeredMarbleTexture() {
   const canvas = document.createElement('canvas');
   canvas.width = 256;

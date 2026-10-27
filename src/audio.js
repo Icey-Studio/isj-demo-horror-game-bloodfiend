@@ -248,26 +248,98 @@ class HorrorAudioManager {
     noise.start(now);
   }
 
-  // Tiếng bước chân trên bùn ướt (Squishy Mud Footstep)
+  // Tiếng bước chân giày cảnh sát trên đất rừng & sỏi ướt (Realistic Wet Gravel & Forest Soil Footstep)
   playFootstepMud() {
     if (!this.ctx || this.isMuted) return;
     const now = this.ctx.currentTime;
+    const pitchVar = 0.92 + Math.random() * 0.16;
 
-    // Tiếng bẹt thấp
-    const osc = this.ctx.createOscillator();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(95, now);
-    osc.frequency.exponentialRampToValueAtTime(32, now + 0.1);
+    // 1. Âm trầm gót giày nện xuống đất ẩm (Organic Heel Thud)
+    const heelOsc = this.ctx.createOscillator();
+    heelOsc.type = 'sine';
+    heelOsc.frequency.setValueAtTime(78 * pitchVar, now);
+    heelOsc.frequency.exponentialRampToValueAtTime(28, now + 0.085);
 
-    const gain = this.ctx.createGain();
-    gain.gain.setValueAtTime(0.3, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+    const heelGain = this.ctx.createGain();
+    heelGain.gain.setValueAtTime(0.26, now);
+    heelGain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
 
-    osc.connect(gain);
-    gain.connect(this.masterGain);
+    heelOsc.connect(heelGain);
+    heelGain.connect(this.masterGain);
+    heelOsc.start(now);
+    heelOsc.stop(now + 0.095);
 
-    osc.start(now);
-    osc.stop(now + 0.11);
+    // 2. Tiếng lạo xạo của sỏi ướt, lá khô và bùn đất (Filtered Gravel/Soil Crunch)
+    const bufferSize = Math.floor(this.ctx.sampleRate * 0.11);
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      const env = Math.sin((i / bufferSize) * Math.PI) * Math.exp(-i / (bufferSize * 0.55));
+      data[i] = (Math.random() * 2 - 1) * env;
+    }
+
+    const crunchNoise = this.ctx.createBufferSource();
+    crunchNoise.buffer = buffer;
+
+    const bandpass = this.ctx.createBiquadFilter();
+    bandpass.type = 'bandpass';
+    bandpass.frequency.setValueAtTime(620 * pitchVar, now);
+    bandpass.Q.setValueAtTime(1.6, now);
+
+    const crunchGain = this.ctx.createGain();
+    crunchGain.gain.setValueAtTime(0.18, now);
+    crunchGain.gain.exponentialRampToValueAtTime(0.002, now + 0.105);
+
+    crunchNoise.connect(bandpass);
+    bandpass.connect(crunchGain);
+    crunchGain.connect(this.masterGain);
+    crunchNoise.start(now);
+  }
+
+  // Tiếng bước chân giày da cảnh sát trên sàn gỗ & đá cẩm thạch trong biệt thự (Realistic Indoor Wood/Marble Boot Step)
+  playFootstepWood() {
+    if (!this.ctx || this.isMuted) return;
+    const now = this.ctx.currentTime;
+    const pitchVar = 0.93 + Math.random() * 0.14;
+
+    // 1. Tiếng gót giày da trầm ấm chạm mặt sàn gỗ/đá (Boot Heel Thump)
+    const thumpOsc = this.ctx.createOscillator();
+    thumpOsc.type = 'sine';
+    thumpOsc.frequency.setValueAtTime(105 * pitchVar, now);
+    thumpOsc.frequency.exponentialRampToValueAtTime(38, now + 0.075);
+
+    const thumpGain = this.ctx.createGain();
+    thumpGain.gain.setValueAtTime(0.32, now);
+    thumpGain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+
+    thumpOsc.connect(thumpGain);
+    thumpGain.connect(this.masterGain);
+    thumpOsc.start(now);
+    thumpOsc.stop(now + 0.085);
+
+    // 2. Tiếng mũi giày tiếp đất nhẹ ngay sau gót giày (Sole Tap + Wood Resonance)
+    const bufferSize = Math.floor(this.ctx.sampleRate * 0.065);
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufferSize * 0.3));
+    }
+
+    const tapNoise = this.ctx.createBufferSource();
+    tapNoise.buffer = buffer;
+
+    const woodFilter = this.ctx.createBiquadFilter();
+    woodFilter.type = 'lowpass';
+    woodFilter.frequency.setValueAtTime(480 * pitchVar, now + 0.018);
+
+    const tapGain = this.ctx.createGain();
+    tapGain.gain.setValueAtTime(0.14, now + 0.018);
+    tapGain.gain.exponentialRampToValueAtTime(0.001, now + 0.075);
+
+    tapNoise.connect(woodFilter);
+    woodFilter.connect(tapGain);
+    tapGain.connect(this.masterGain);
+    tapNoise.start(now + 0.018);
   }
 
   // Tiếng sấm rền nhiều tầng (Deep Layered Thunderclap)

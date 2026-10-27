@@ -117,11 +117,11 @@ class PlayerInventoryManager {
     this.rootEl = document.createElement('div');
     this.rootEl.id = 'bf-inventory-system';
     this.rootEl.innerHTML = `
-      <!-- THANH 9 Ô HOTBAR DƯỚI ĐÁY MÀN HÌNH (Hiện khi uiState === 1 hoặc 2) -->
+      <!-- THANH 9 Ô HOTBAR DƯỚI ĐÁY MÀN HÌNH (Hiện/Ẩn khi bấm phím G) -->
       <div class="mc-hotbar-wrapper" id="mc-hotbar-wrapper" style="display: none;">
         <div class="mc-selected-item-label" id="mc-selected-item-label">Đèn Pin Chiến Thuật</div>
         <div class="mc-hotbar-grid" id="mc-hotbar-grid"></div>
-        <div class="mc-hotbar-subhint">[1-9 / Lăn chuột] Chọn ô • [Q] Ném đồ đang cầm • [G] Mở túi đồ / Ẩn thanh</div>
+        <div class="mc-hotbar-subhint">[1-9 / Lăn chuột] Chọn ô • [Click Trái] Dùng/Bắn/Đọc • [Q] Ném đồ • [G] Ẩn/Hiện thanh 9 ô</div>
       </div>
 
       <!-- BẢNG TÚI ĐỒ ĐẦY ĐỦ + NHÂN VẬT CẢNH SÁT AN (Hiện khi uiState === 2) -->
@@ -132,7 +132,7 @@ class PlayerInventoryManager {
             <span class="mc-inv-close-hint">[Nhấn G lần nữa để đóng & ẩn thanh 9 ô]</span>
           </div>
 
-          <!-- Khu vực nửa trên: Khung trang bị giáp + Mô hình Nhân vật Cảnh Sát + Thông tin chi tiết -->
+          <!-- Khu vực nửa trên: Khung trang bị giáp + Thông tin chi tiết vật phẩm -->
           <div class="mc-inv-top-section">
             <!-- 4 Ô Trang phục Cảnh Sát -->
             <div class="mc-armor-column">
@@ -142,16 +142,10 @@ class PlayerInventoryManager {
               <div class="mc-slot armor-equipped" title="Giày da tuần tra chống trượt"><span class="slot-icon">👞</span></div>
             </div>
 
-            <!-- Ô Xem Trước Nhân Vật Cảnh Sát An (Vẽ theo ảnh chân dung MinhPhuc00Ne / Jos) -->
-            <div class="mc-character-preview-box" id="mc-character-preview-box">
-              <canvas id="mc-character-canvas" width="210" height="250"></canvas>
-              <div class="mc-char-nametag">SĨ QUAN AN (PATROL-07)</div>
-            </div>
-
-            <!-- Ô Tay Phụ & Khung Chi Tiết Vật Phẩm Đang Chọn -->
+            <!-- Khung Chi Tiết Vật Phẩm Đang Chọn (Mở rộng sang trọng, đậm chất RPG/Survival) -->
             <div class="mc-item-inspector" id="mc-item-inspector">
               <div class="mc-inspector-title" id="mc-insp-title">Đèn Pin Chiến Thuật</div>
-              <div class="mc-inspector-desc" id="mc-insp-desc">Đèn pin cảnh sát công suất cao. Nhấn [F] để bật/tắt.</div>
+              <div class="mc-inspector-desc" id="mc-insp-desc">Đèn pin cảnh sát công suất cao. Nhấn [F] để bật/tắt nguồn sáng.</div>
               <div class="mc-inspector-actions" id="mc-insp-actions"></div>
             </div>
           </div>
@@ -196,7 +190,6 @@ class PlayerInventoryManager {
     this.inspTitleEl = this.rootEl.querySelector('#mc-insp-title');
     this.inspDescEl = this.rootEl.querySelector('#mc-insp-desc');
     this.inspActionsEl = this.rootEl.querySelector('#mc-insp-actions');
-    this.portraitCanvas = this.rootEl.querySelector('#mc-character-canvas');
 
     this.caseModalEl = this.rootEl.querySelector('#case-file-modal');
     this.caseTitleEl = this.rootEl.querySelector('#case-doc-title');
@@ -213,28 +206,15 @@ class PlayerInventoryManager {
     window.addEventListener('mousemove', (e) => {
       this.mousePos.x = e.clientX / Math.max(1, window.innerWidth);
       this.mousePos.y = e.clientY / Math.max(1, window.innerHeight);
-      if (this.uiState === 2) {
-        this.drawOfficerAnPortrait();
-      }
     });
 
     this.renderUI();
   }
 
-  // Chu trình 3 trạng thái khi bấm phím G:
-  // Lần 1 (0 -> 1): Hiện thanh 9 ô bên dưới
-  // Lần 2 (1 -> 2): Mở toàn bộ túi đồ + Nhân vật Cảnh Sát An
-  // Lần 3 (2 -> 0): Đóng túi đồ và ẩn luôn thanh 9 ô
-  cycleInventoryState(canvasForPointerLock = null) {
-    this.uiState = (this.uiState + 1) % 3;
-    audioManager.playClick();
-
-    if (this.uiState === 2) {
-      document.exitPointerLock?.();
-      this.drawOfficerAnPortrait();
-    } else if (this.uiState === 0 && canvasForPointerLock) {
-      canvasForPointerLock.requestPointerLock?.();
-    }
+  // Bấm phím G: Chuyển đổi 2 trạng thái gọn nhẹ (0: Ẩn thanh 9 ô <-> 1: Hiện thanh 9 ô)
+  cycleInventoryState() {
+    this.uiState = this.uiState === 0 ? 1 : 0;
+    audioManager.playHover();
     this.renderUI();
     return this.uiState;
   }
@@ -382,12 +362,11 @@ class PlayerInventoryManager {
   renderUI() {
     if (!this.rootEl) return;
 
-    // Ẩn/hiện theo đúng 3 trạng thái của phím G:
-    // uiState === 0: Không hiện gì
-    // uiState === 1: Chỉ hiện thanh 9 ô dưới đáy
-    // uiState === 2: Hiện bảng túi đồ đầy đủ + thanh 9 ô
-    this.hotbarWrapperEl.style.display = (this.uiState === 1 || this.uiState === 2) ? 'flex' : 'none';
-    this.fullInvBackdropEl.style.display = (this.uiState === 2) ? 'flex' : 'none';
+    // Ẩn/hiện thanh 9 ô dưới đáy khi bấm phím G (bỏ bảng túi đồ lớn theo yêu cầu)
+    this.hotbarWrapperEl.style.display = (this.uiState === 1) ? 'flex' : 'none';
+    if (this.fullInvBackdropEl) {
+      this.fullInvBackdropEl.style.display = 'none';
+    }
 
     const activeItem = this.getActiveItem();
     if (activeItem) {
@@ -470,7 +449,7 @@ class PlayerInventoryManager {
 
   // Vẽ chân dung Sĩ Quan Cảnh Sát An trong khung Nhân Vật của Túi Đồ (Giống ảnh chân dung Founder MinhPhuc00Ne / Jos)
   drawOfficerAnPortrait() {
-    if (!this.portraitCanvas) return;
+    return;
     const ctx = this.portraitCanvas.getContext('2d');
     const w = this.portraitCanvas.width;
     const h = this.portraitCanvas.height;
@@ -692,234 +671,355 @@ class PlayerInventoryManager {
 export const playerInventory = new PlayerInventoryManager();
 
 // ============================================================================
-// HÀM DỰNG MÔ HÌNH 3D NHÂN VẬT CẢNH SÁT AN (DÙNG KHI ẤN PHÍM [U] ĐỔI GÓC NHÌN)
-// Thiết kế theo đúng bức ảnh chân dung người dùng gửi:
-// Tóc đen hai mái 6/4 bồng bềnh, gương mặt sáng, áo sơ mi trắng Cảnh Sát + cà vạt đen,
-// cầu vai cảnh sát, huy hiệu vàng trên ngực, đai đeo súng & quần âu xanh đen.
+// HÀM DỰNG MÔ HÌNH 3D CHÂN THỰC TỪ ẢNH THẬT /humanb.jpg (DÙNG CHO GÓC NHÌN [U] & TRƯNG BÀY 3D)
+// Kết hợp giải phẫu 3D mượt mà (Smooth Organic Mesh: Đầu oval, mũi nổi 3D, tai, tóc 6/4 uốn lọn,
+// thân hình vai rộng, tay áo sơ mi trắng ngắn tay, cà vạt đen 3D) và Photo-Mapping trực tiếp từ /humanb.jpg!
 // ============================================================================
 export function createOfficerAn3DCharacter() {
   const group = new THREE.Group();
 
-  // Tạo Canvas Texture khuôn mặt của An (MinhPhuc00Ne / Jos) cho khối đầu 3D
+  // 1. Tạo Canvas Texture Khuôn Mặt 512x512 (Có fallback sắc nét + Tự động nạp ảnh thật /humanb.jpg)
   const faceCanvas = document.createElement('canvas');
-  faceCanvas.width = 256;
-  faceCanvas.height = 256;
+  faceCanvas.width = 512;
+  faceCanvas.height = 512;
   const fCtx = faceCanvas.getContext('2d');
-  fCtx.fillStyle = '#f2c8ad';
-  fCtx.fillRect(0, 0, 256, 256);
 
-  // Hồng nhẹ hai bên má
-  fCtx.fillStyle = 'rgba(215, 120, 110, 0.25)';
-  fCtx.beginPath();
-  fCtx.arc(68, 150, 24, 0, Math.PI * 2);
-  fCtx.arc(188, 150, 24, 0, Math.PI * 2);
-  fCtx.fill();
-
-  // Lông mày đen đậm
-  fCtx.fillStyle = '#151318';
-  fCtx.fillRect(52, 92, 52, 10);
-  fCtx.fillRect(152, 92, 52, 10);
-
-  // Đôi mắt hai mí sắc nét
-  [78, 178].forEach(ex => {
-    fCtx.fillStyle = '#ffffff';
-    fCtx.beginPath();
-    fCtx.ellipse(ex, 118, 22, 13, 0, 0, Math.PI * 2);
-    fCtx.fill();
-    fCtx.fillStyle = '#1b110c';
-    fCtx.beginPath();
-    fCtx.arc(ex, 118, 11, 0, Math.PI * 2);
-    fCtx.fill();
-    fCtx.fillStyle = '#ffffff';
-    fCtx.beginPath();
-    fCtx.arc(ex - 4, 114, 4, 0, Math.PI * 2);
-    fCtx.fill();
-  });
-
-  // Sống mũi & Môi mỉm cười nhẹ giống ảnh
-  fCtx.strokeStyle = '#c99274';
-  fCtx.lineWidth = 5;
-  fCtx.beginPath();
-  fCtx.moveTo(128, 115);
-  fCtx.lineTo(123, 162);
-  fCtx.lineTo(136, 165);
-  fCtx.stroke();
-
-  fCtx.fillStyle = '#c46862';
-  fCtx.beginPath();
-  fCtx.ellipse(128, 196, 28, 10, 0, 0, Math.PI * 2);
-  fCtx.fill();
+  // Màu da nền đồng bộ hoàn hảo với tông da thật trong ảnh humanb.jpg
+  fCtx.fillStyle = '#e8c3b0';
+  fCtx.fillRect(0, 0, 512, 512);
 
   const faceTex = new THREE.CanvasTexture(faceCanvas);
   faceTex.colorSpace = THREE.SRGBColorSpace;
 
-  // Tạo Canvas Texture Áo Sơ Mi Trắng + Cà Vạt Đen + Huy Hiệu Cảnh Sát
+  // 2. Tạo Canvas Texture Áo Sơ Mi Trắng Ngắn Tay + Cà Vạt Đen 512x512 (Tự động nạp từ /humanb.jpg)
   const shirtCanvas = document.createElement('canvas');
-  shirtCanvas.width = 256;
-  shirtCanvas.height = 256;
+  shirtCanvas.width = 512;
+  shirtCanvas.height = 512;
   const sCtx = shirtCanvas.getContext('2d');
-  sCtx.fillStyle = '#f2f5fa';
-  sCtx.fillRect(0, 0, 256, 256);
+  sCtx.fillStyle = '#eff2f9';
+  sCtx.fillRect(0, 0, 512, 512);
 
-  // Cổ áo sơ mi trắng chữ V
-  sCtx.strokeStyle = '#c5cdd9';
+  // Vẽ sẵn nếp áo sơ mi trắng, túi ngực trái và cà vạt đen trước khi ảnh nạp xong
+  sCtx.strokeStyle = '#d4dbe8';
   sCtx.lineWidth = 4;
-  sCtx.strokeRect(165, 65, 55, 62); // Túi áo ngực
-
-  // Huy hiệu cảnh sát ngôi sao vàng trên ngực áo
-  sCtx.fillStyle = '#ffd166';
-  sCtx.beginPath();
-  sCtx.arc(192, 45, 15, 0, Math.PI * 2);
-  sCtx.fill();
-
-  // Cà vạt đen chạy dọc chính giữa ngực áo
-  sCtx.fillStyle = '#121318';
-  sCtx.beginPath();
-  sCtx.moveTo(112, 8);
-  sCtx.lineTo(144, 8);
-  sCtx.lineTo(136, 32);
-  sCtx.lineTo(120, 32);
-  sCtx.closePath();
-  sCtx.fill();
-
-  sCtx.beginPath();
-  sCtx.moveTo(120, 32);
-  sCtx.lineTo(136, 32);
-  sCtx.lineTo(146, 195);
-  sCtx.lineTo(128, 224);
-  sCtx.lineTo(110, 195);
-  sCtx.closePath();
-  sCtx.fill();
+  sCtx.strokeRect(305, 190, 95, 110); // Túi ngực trái giống ảnh humanb.jpg
 
   const shirtTex = new THREE.CanvasTexture(shirtCanvas);
   shirtTex.colorSpace = THREE.SRGBColorSpace;
 
-  const skinMat = new THREE.MeshStandardMaterial({ color: 0xf0c4a8, roughness: 0.65 });
-  const hairMat = new THREE.MeshStandardMaterial({ color: 0x111116, roughness: 0.8 });
-  const whiteShirtMat = new THREE.MeshStandardMaterial({ color: 0xf2f5fa, roughness: 0.6 });
-  const frontShirtMat = new THREE.MeshStandardMaterial({ map: shirtTex, roughness: 0.55 });
-  const navyPantsMat = new THREE.MeshStandardMaterial({ color: 0x121826, roughness: 0.75 });
-  const bootMat = new THREE.MeshStandardMaterial({ color: 0x0a0b0e, roughness: 0.4, metalness: 0.2 });
-  const goldMat = new THREE.MeshStandardMaterial({ color: 0xffd166, metalness: 0.8, roughness: 0.25 });
+  // Nạp ảnh thật /humanb.jpg để ánh xạ (Photo-Projection) khuôn mặt thật và áo sơ mi thật lên mô hình 3D
+  const humanImg = new Image();
+  humanImg.crossOrigin = 'anonymous';
+  humanImg.onload = () => {
+    const iw = humanImg.width;
+    const ih = humanImg.height;
 
-  // 1. ĐẦU & MÁI TÓC ĐEN RẼ NGÔI 6/4 (Head & Layered Curtain Hair)
+    // A. Ánh xạ khuôn mặt thật từ /humanb.jpg vào chính giữa UV mặt trước của khối đầu 3D
+    // Trong Cylinder/Sphere UV, mặt trước (-Z) nằm ở trung tâm u = 0.5
+    fCtx.fillStyle = '#e8c3b0';
+    fCtx.fillRect(0, 0, 512, 512);
+
+    // Vẽ vùng da mặt mở rộng rồi làm mềm viền (feathering) để hòa quyện 100% vào đầu 3D
+    fCtx.save();
+    fCtx.beginPath();
+    fCtx.ellipse(256, 262, 165, 205, 0, 0, Math.PI * 2);
+    fCtx.clip();
+    // Đảo chiều ngang UV trên mặt trụ phía trước (-Z) để giữ đúng chiều trái-phải như trong ảnh gốc humanb.jpg
+    fCtx.translate(512, 0);
+    fCtx.scale(-1, 1);
+    // Vùng khuôn mặt trong humanb.jpg: x từ 45.5% đến 69.5%, y từ 21.5% đến 48.5%
+    fCtx.drawImage(
+      humanImg,
+      iw * 0.455,
+      ih * 0.215,
+      iw * 0.24,
+      ih * 0.27,
+      90,
+      52,
+      332,
+      415
+    );
+    fCtx.restore();
+
+    // Làm dịu viền chuyển tiếp giữa ảnh mặt thật và màu da quanh thái dương/cằm
+    const grad = fCtx.createRadialGradient(256, 262, 115, 256, 262, 185);
+    grad.addColorStop(0, 'rgba(232, 195, 176, 0)');
+    grad.addColorStop(0.75, 'rgba(232, 195, 176, 0.15)');
+    grad.addColorStop(1, 'rgba(232, 195, 176, 1)');
+    fCtx.fillStyle = grad;
+    fCtx.fillRect(0, 0, 512, 512);
+    faceTex.needsUpdate = true;
+
+    // B. Ánh xạ phần thân áo sơ mi trắng + cà vạt đen thật từ /humanb.jpg
+    sCtx.fillStyle = '#eff2f9';
+    sCtx.fillRect(0, 0, 512, 512);
+    // Vùng áo sơ mi & cà vạt trong humanb.jpg: x từ 27% đến 73%, y từ 49% đến 98%
+    sCtx.drawImage(
+      humanImg,
+      iw * 0.27,
+      ih * 0.49,
+      iw * 0.46,
+      ih * 0.49,
+      0,
+      0,
+      512,
+      512
+    );
+    shirtTex.needsUpdate = true;
+  };
+  humanImg.src = '/humanb.jpg';
+
+  // Vật liệu PBR tự nhiên
+  const skinMat = new THREE.MeshStandardMaterial({
+    color: 0xe8c3b0,
+    roughness: 0.58,
+    metalness: 0.04
+  });
+  const photoFaceMat = new THREE.MeshStandardMaterial({
+    map: faceTex,
+    roughness: 0.52,
+    metalness: 0.04
+  });
+  const hairMat = new THREE.MeshStandardMaterial({
+    color: 0x141318,
+    roughness: 0.72,
+    metalness: 0.12
+  });
+  const whiteShirtMat = new THREE.MeshStandardMaterial({
+    color: 0xf1f4fb,
+    roughness: 0.62,
+    metalness: 0.03
+  });
+  const photoShirtMat = new THREE.MeshStandardMaterial({
+    map: shirtTex,
+    roughness: 0.58,
+    metalness: 0.04
+  });
+  const blackTieMat = new THREE.MeshStandardMaterial({
+    color: 0x15161c,
+    roughness: 0.38,
+    metalness: 0.18
+  });
+  const darkSlacksMat = new THREE.MeshStandardMaterial({
+    color: 0x161922,
+    roughness: 0.7,
+    metalness: 0.08
+  });
+  const leatherShoeMat = new THREE.MeshStandardMaterial({
+    color: 0x0c0d10,
+    roughness: 0.28,
+    metalness: 0.35
+  });
+
+  // ==========================================================================
+  // 1. CỔ & ĐẦU 3D GIẢI PHẪU TỰ NHIÊN + MÁI TÓC ĐEN RẼ NGÔI 6/4 BỒNG BỀNH
+  // ==========================================================================
   const headGroup = new THREE.Group();
-  headGroup.position.set(0, 1.48, 0);
+  headGroup.position.set(0, 1.49, 0);
 
-  const headMaterials = [
-    skinMat, // right
-    skinMat, // left
-    hairMat, // top
-    skinMat, // bottom
-    skinMat, // back (+z)
-    new THREE.MeshStandardMaterial({ map: faceTex, roughness: 0.6 }) // front (-z là hướng nhìn của nhân vật)
-  ];
-  const headMesh = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.30, 0.28), headMaterials);
-  headGroup.add(headMesh);
+  // Cổ người tự nhiên nối liền đầu và cổ áo sơ mi
+  const neckMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.062, 0.072, 0.14, 18), skinMat);
+  neckMesh.position.set(0, -0.14, 0.01);
+  headGroup.add(neckMesh);
 
-  // Phần tóc đen dày phía trên, sau gáy và hai lọn mái 6/4 rủ trước trán
-  const hairTop = new THREE.Mesh(new THREE.BoxGeometry(0.305, 0.11, 0.305), hairMat);
-  hairTop.position.set(0, 0.12, 0);
-  headGroup.add(hairTop);
+  // Khối hộp sọ & gương mặt Oval tự nhiên (Xoay mặt chính của Sphere/Cylinder về hướng -Z)
+  const craniumGeo = new THREE.SphereGeometry(0.142, 28, 24);
+  craniumGeo.scale(0.96, 1.18, 0.98);
+  const craniumMesh = new THREE.Mesh(craniumGeo, skinMat);
+  headGroup.add(craniumMesh);
 
-  const hairBack = new THREE.Mesh(new THREE.BoxGeometry(0.30, 0.24, 0.08), hairMat);
-  hairBack.position.set(0, 0.04, 0.12);
-  headGroup.add(hairBack);
+  // Lớp mặt nạ 3D cong nhẹ ôm sát phía trước mặt (-Z) hiển thị ảnh khuôn mặt thật từ /humanb.jpg
+  const faceMaskGeo = new THREE.CylinderGeometry(0.138, 0.122, 0.27, 28, 1, true, Math.PI * 0.68, Math.PI * 0.64);
+  faceMaskGeo.scale(0.98, 1.0, 0.92);
+  const faceMaskMesh = new THREE.Mesh(faceMaskGeo, photoFaceMat);
+  faceMaskMesh.position.set(0, -0.01, -0.012);
+  headGroup.add(faceMaskMesh);
 
-  // Lọn tóc mái rẽ ngôi 6/4 trước trán
-  const bangLeft = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.11, 0.05), hairMat);
-  bangLeft.position.set(-0.075, 0.08, -0.145);
-  bangLeft.rotation.z = 0.18;
-  headGroup.add(bangLeft);
+  // Sống mũi 3D nổi nhẹ giúp góc nhìn nghiêng 3/4 có chiều sâu thật như người thật
+  const noseBridge = new THREE.Mesh(new THREE.ConeGeometry(0.018, 0.055, 10), skinMat);
+  noseBridge.position.set(0, -0.008, -0.142);
+  noseBridge.rotation.x = -0.18;
+  headGroup.add(noseBridge);
 
-  const bangRight = new THREE.Mesh(new THREE.BoxGeometry(0.13, 0.10, 0.05), hairMat);
-  bangRight.position.set(0.08, 0.085, -0.145);
-  bangRight.rotation.z = -0.15;
-  headGroup.add(bangRight);
+  // Hai vành tai 3D hai bên thái dương
+  [-0.136, 0.136].forEach((ex) => {
+    const ear = new THREE.Mesh(new THREE.SphereGeometry(0.028, 12, 12), skinMat);
+    ear.scale.set(0.45, 1.15, 0.7);
+    ear.position.set(ex, -0.005, 0.005);
+    headGroup.add(ear);
+  });
+
+  // MÁI TÓC ĐEN 6/4 BỒNG BỀNH ĐIÊU KHẮC 3D (Sát theo kiểu tóc trong ảnh /humanb.jpg)
+  const hairGroup = new THREE.Group();
+
+  // Vòm tóc dày trên đỉnh đầu & sau gáy
+  const hairCrown = new THREE.Mesh(new THREE.SphereGeometry(0.154, 24, 20), hairMat);
+  hairCrown.scale.set(1.02, 1.06, 1.05);
+  hairCrown.position.set(0, 0.042, 0.018);
+  hairGroup.add(hairCrown);
+
+  // Phần tóc gáy cắt gọn ôm cổ
+  const hairNape = new THREE.Mesh(new THREE.CylinderGeometry(0.132, 0.105, 0.14, 16), hairMat);
+  hairNape.position.set(0, -0.035, 0.045);
+  hairGroup.add(hairNape);
+
+  // Các lọn tóc mái rẽ ngôi 6/4 uốn cong rủ xuống trán và hai bên thái dương
+  const createCurvedHairLock = (x, y, z, rx, ry, rz, sx, sy, sz) => {
+    const lock = new THREE.Mesh(new THREE.SphereGeometry(0.065, 14, 12), hairMat);
+    lock.scale.set(sx, sy, sz);
+    lock.position.set(x, y, z);
+    lock.rotation.set(rx, ry, rz);
+    hairGroup.add(lock);
+  };
+
+  // Mái bên trái (phần 6 - dày và uốn phồng nhẹ qua chân mày)
+  createCurvedHairLock(-0.058, 0.095, -0.105, 0.35, 0.2, 0.32, 1.25, 0.85, 0.95);
+  createCurvedHairLock(-0.105, 0.055, -0.075, 0.2, 0.35, 0.48, 0.95, 1.15, 0.9);
+  // Mái giữa rủ nhẹ xuống trán (như trong ảnh humanb.jpg)
+  createCurvedHairLock(-0.012, 0.072, -0.132, 0.42, 0.05, 0.12, 0.55, 0.95, 0.55);
+  // Mái bên phải (phần 4 - ôm gọn thái dương phải)
+  createCurvedHairLock(0.065, 0.092, -0.102, 0.35, -0.2, -0.35, 1.15, 0.85, 0.92);
+  createCurvedHairLock(0.108, 0.052, -0.072, 0.2, -0.35, -0.5, 0.9, 1.12, 0.88);
+
+  headGroup.add(hairGroup);
+
+  // Đèn trợ sáng dịu nhẹ chiếu riêng cho gương mặt khi người chơi bật góc nhìn thứ 3 [U]
+  const faceFillLight = new THREE.PointLight(0xfff6eb, 1.2, 2.4);
+  faceFillLight.position.set(0, 0.08, -0.65);
+  headGroup.add(faceFillLight);
 
   group.add(headGroup);
 
-  // 2. THÂN TRÊN: ÁO SƠ MI TRẮNG CẢNH SÁT + CÀ VẠT ĐEN + CẦU VAI
-  const torsoMaterials = [
-    whiteShirtMat,
-    whiteShirtMat,
-    whiteShirtMat,
-    whiteShirtMat,
-    whiteShirtMat, // mặt lưng (+z)
-    frontShirtMat  // mặt ngực có cà vạt đen (-z)
-  ];
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.56, 0.22), torsoMaterials);
-  torso.position.set(0, 1.04, 0);
-  torso.castShadow = true;
-  group.add(torso);
+  // ==========================================================================
+  // 2. THÂN TRÊN: ÁO SƠ MI TRẮNG NGẮN TAY + CỔ BẺ 3D + CÀ VẠT ĐEN NỔI 3D (GIỐNG ẢNH)
+  // ==========================================================================
+  const torsoGroup = new THREE.Group();
+  torsoGroup.position.set(0, 1.03, 0);
 
-  // Cầu vai Cảnh Sát hai bên vai
-  [-0.16, 0.16].forEach(ex => {
-    const epaulet = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.025, 0.18), navyPantsMat);
-    epaulet.position.set(ex, 1.33, 0);
-    group.add(epaulet);
-    const goldStrip = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.185), goldMat);
-    goldStrip.position.set(ex, 1.33, 0);
-    group.add(goldStrip);
+  // Thân áo sơ mi trắng có phom vai rộng nam tính, hơi thuôn nhẹ ở eo
+  const chestGeo = new THREE.CylinderGeometry(0.215, 0.182, 0.58, 24);
+  chestGeo.scale(1.06, 1.0, 0.62);
+  const chestBackMesh = new THREE.Mesh(chestGeo, whiteShirtMat);
+  torsoGroup.add(chestBackMesh);
+
+  // Mặt trước ngực áo ánh xạ trực tiếp từ bức ảnh /humanb.jpg
+  const frontChestGeo = new THREE.PlaneGeometry(0.41, 0.56, 8, 8);
+  // Uốn cong nhẹ mặt áo theo lồng ngực
+  const posAttr = frontChestGeo.attributes.position;
+  for (let i = 0; i < posAttr.count; i++) {
+    const px = posAttr.getX(i);
+    posAttr.setZ(i, Math.cos(px * 4.2) * 0.025);
+  }
+  frontChestGeo.computeVertexNormals();
+  const frontChestMesh = new THREE.Mesh(frontChestGeo, photoShirtMat);
+  frontChestMesh.position.set(0, 0, -0.105);
+  frontChestMesh.rotation.y = Math.PI; // Hướng mặt ra phía trước (-Z)
+  torsoGroup.add(frontChestMesh);
+
+  // Cổ áo sơ mi trắng bẻ chữ V nổi khối 3D
+  [-0.058, 0.058].forEach((cx, idx) => {
+    const collarWing = new THREE.Mesh(new THREE.BoxGeometry(0.085, 0.065, 0.025), whiteShirtMat);
+    collarWing.position.set(cx, 0.275, -0.095);
+    collarWing.rotation.z = idx === 0 ? -0.42 : 0.42;
+    collarWing.rotation.y = idx === 0 ? 0.25 : -0.25;
+    torsoGroup.add(collarWing);
   });
 
-  // Đai lưng chiến thuật Cảnh Sát + Bao súng bên hông
-  const belt = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.07, 0.24), bootMat);
-  belt.position.set(0, 0.75, 0);
-  group.add(belt);
-  const buckle = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.06, 0.25), goldMat);
-  buckle.position.set(0, 0.75, 0);
-  group.add(buckle);
+  // Cà vạt đen 3D nổi khối trên ngực áo (Nút thắt Windsor + Thân cà vạt đen giống hệt ảnh humanb.jpg)
+  const tieKnot = new THREE.Mesh(new THREE.ConeGeometry(0.032, 0.055, 6), blackTieMat);
+  tieKnot.rotation.z = Math.PI;
+  tieKnot.scale.set(1.1, 1.0, 0.55);
+  tieKnot.position.set(0, 0.245, -0.122);
+  torsoGroup.add(tieKnot);
 
-  // 3. HAI CÁNH TAY (Tay áo sơ mi trắng ngắn tay + Cánh tay trần giống ảnh)
-  const createArm = (isRight) => {
+  const tieBlade = new THREE.Mesh(new THREE.BoxGeometry(0.056, 0.42, 0.016), blackTieMat);
+  tieBlade.position.set(0, 0.02, -0.124);
+  torsoGroup.add(tieBlade);
+
+  const tieTip = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.06, 4), blackTieMat);
+  tieTip.rotation.z = Math.PI;
+  tieTip.rotation.y = Math.PI / 4;
+  tieTip.scale.set(1.0, 1.0, 0.35);
+  tieTip.position.set(0, -0.215, -0.124);
+  torsoGroup.add(tieTip);
+
+  group.add(torsoGroup);
+
+  // ==========================================================================
+  // 3. HAI CÁNH TAY: TAY ÁO SƠ MI TRẮNG NGẮN TAY RỘNG + CẲNG TAY & BÀN TAY TRẦN
+  // ==========================================================================
+  const createRealisticArm = (isRight) => {
     const armPivot = new THREE.Group();
-    armPivot.position.set(isRight ? 0.29 : -0.29, 1.26, 0);
+    armPivot.position.set(isRight ? 0.255 : -0.255, 1.27, 0);
 
-    const sleeve = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.22, 0.14), whiteShirtMat);
-    sleeve.position.set(0, -0.09, 0);
-    armPivot.add(sleeve);
+    // Khớp vai tròn
+    const shoulder = new THREE.Mesh(new THREE.SphereGeometry(0.078, 14, 14), whiteShirtMat);
+    armPivot.add(shoulder);
 
-    const forearm = new THREE.Mesh(new THREE.BoxGeometry(0.115, 0.32, 0.115), skinMat);
+    // Ống tay áo sơ mi trắng ngắn tay hơi xòe tự nhiên như trong ảnh humanb.jpg
+    const shortSleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.074, 0.086, 0.24, 16), whiteShirtMat);
+    shortSleeve.position.set(0, -0.11, 0);
+    shortSleeve.rotation.z = isRight ? -0.06 : 0.06;
+    armPivot.add(shortSleeve);
+
+    // Cẳng tay trần màu da tự nhiên
+    const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.054, 0.044, 0.29, 16), skinMat);
     forearm.position.set(0, -0.34, 0);
     armPivot.add(forearm);
+
+    // Bàn tay 3D
+    const hand = new THREE.Mesh(new THREE.SphereGeometry(0.048, 12, 12), skinMat);
+    hand.scale.set(0.85, 1.25, 0.65);
+    hand.position.set(0, -0.50, 0);
+    armPivot.add(hand);
 
     return armPivot;
   };
 
-  const leftArm = createArm(false);
-  const rightArm = createArm(true);
-  group.add(leftArm);
-  group.add(rightArm);
+  const leftArm = createRealisticArm(false);
+  const rightArm = createRealisticArm(true);
+  group.add(leftArm, rightArm);
 
   // Vũ khí cầm trên tay phải ở góc nhìn thứ 3
   const tpPistol = new THREE.Mesh(
-    new THREE.BoxGeometry(0.05, 0.14, 0.24),
-    new THREE.MeshStandardMaterial({ color: 0x88929e, metalness: 0.5, roughness: 0.3 })
+    new THREE.BoxGeometry(0.048, 0.13, 0.22),
+    new THREE.MeshStandardMaterial({ color: 0x222832, metalness: 0.75, roughness: 0.25 })
   );
-  tpPistol.position.set(0, -0.48, -0.12);
+  tpPistol.position.set(0, -0.50, -0.11);
+  tpPistol.visible = false;
   rightArm.add(tpPistol);
 
-  // 4. HAI CHÂN (Quần âu Cảnh Sát xanh đen & Giày da đen)
-  const createLeg = (isRight) => {
+  // ==========================================================================
+  // 4. HÔNG, QUẦN ÂU TỐI MÀU & GIÀY DA ĐEN LỊCH LÃM
+  // ==========================================================================
+  const pelvis = new THREE.Mesh(new THREE.CylinderGeometry(0.185, 0.18, 0.14, 20), darkSlacksMat);
+  pelvis.scale.set(1.05, 1.0, 0.64);
+  pelvis.position.set(0, 0.72, 0);
+  group.add(pelvis);
+
+  const createRealisticLeg = (isRight) => {
     const legPivot = new THREE.Group();
-    legPivot.position.set(isRight ? 0.11 : -0.11, 0.72, 0);
+    legPivot.position.set(isRight ? 0.105 : -0.105, 0.68, 0);
 
-    const trouser = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.58, 0.18), navyPantsMat);
-    trouser.position.set(0, -0.29, 0);
-    legPivot.add(trouser);
+    // Ống quần âu suông lịch sự
+    const trouserLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.092, 0.076, 0.58, 16), darkSlacksMat);
+    trouserLeg.position.set(0, -0.29, 0);
+    legPivot.add(trouserLeg);
 
-    const boot = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.14, 0.25), bootMat);
-    boot.position.set(0, -0.65, -0.03);
-    legPivot.add(boot);
+    // Giày tây da đen bóng có mũi giày bo tròn
+    const shoeHeel = new THREE.Mesh(new THREE.CylinderGeometry(0.072, 0.075, 0.11, 14), leatherShoeMat);
+    shoeHeel.position.set(0, -0.62, 0.01);
+    const shoeToe = new THREE.Mesh(new THREE.SphereGeometry(0.074, 14, 12), leatherShoeMat);
+    shoeToe.scale.set(0.95, 0.65, 1.55);
+    shoeToe.position.set(0, -0.635, -0.055);
+    legPivot.add(shoeHeel, shoeToe);
 
     return legPivot;
   };
 
-  const leftLeg = createLeg(false);
-  const rightLeg = createLeg(true);
-  group.add(leftLeg);
-  group.add(rightLeg);
+  const leftLeg = createRealisticLeg(false);
+  const rightLeg = createRealisticLeg(true);
+  group.add(leftLeg, rightLeg);
 
   let walkPhase = 0;
 
@@ -931,16 +1031,18 @@ export function createOfficerAn3DCharacter() {
     headGroup.rotation.x = THREE.MathUtils.clamp(pitch * 0.65, -0.5, 0.5);
     if (isMoving) {
       walkPhase += delta * (isRunning ? 13 : 8.5);
-      const swing = Math.sin(walkPhase) * (isRunning ? 0.65 : 0.45);
+      const swing = Math.sin(walkPhase) * (isRunning ? 0.62 : 0.42);
       leftLeg.rotation.x = swing;
       rightLeg.rotation.x = -swing;
-      leftArm.rotation.x = -swing * 0.75;
-      rightArm.rotation.x = tpPistol.visible ? 0.45 + swing * 0.15 : swing * 0.75;
+      leftArm.rotation.x = -swing * 0.72;
+      rightArm.rotation.x = tpPistol.visible ? 0.45 + swing * 0.15 : swing * 0.72;
     } else {
+      // Nhịp thở tự nhiên khi đứng yên
+      const breath = Math.sin(performance.now() * 0.0025) * 0.015;
       leftLeg.rotation.x = THREE.MathUtils.lerp(leftLeg.rotation.x, 0, 0.2);
       rightLeg.rotation.x = THREE.MathUtils.lerp(rightLeg.rotation.x, 0, 0.2);
-      leftArm.rotation.x = THREE.MathUtils.lerp(leftArm.rotation.x, 0, 0.2);
-      rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, tpPistol.visible ? 0.45 : 0, 0.2);
+      leftArm.rotation.x = THREE.MathUtils.lerp(leftArm.rotation.x, breath, 0.2);
+      rightArm.rotation.x = THREE.MathUtils.lerp(rightArm.rotation.x, tpPistol.visible ? 0.45 : -breath, 0.2);
     }
   };
 

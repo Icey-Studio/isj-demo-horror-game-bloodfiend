@@ -34,7 +34,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnSettings = document.getElementById('btn-settings');
   const btnLore = document.getElementById('btn-lore');
 
-  const modalModeSelect = document.getElementById('modal-mode-select');
   const modalSettings = document.getElementById('modal-settings');
   const modalLore = document.getElementById('modal-lore');
 
@@ -44,11 +43,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const crtOverlay = document.querySelector('.crt-overlay');
 
   const gameTransition = document.getElementById('game-transition');
-  const transitionTitle = document.getElementById('transition-mode-title');
-  const transitionDesc = document.getElementById('transition-mode-desc');
-  const btnStartGameplay = document.getElementById('btn-start-gameplay');
-
-  let selectedMode = 'survival';
 
   // Quản lý âm thanh
   audioToggleBtn.addEventListener('click', () => {
@@ -72,9 +66,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Mở các Modal
+  // Bấm BẮT ĐẦU là vào chơi luôn (không cần chọn chế độ Sinh Tồn / Sáng Tạo nữa)
   btnPlay.addEventListener('click', () => {
-    openModal(modalModeSelect);
+    start3DDrivingScene();
   });
 
   btnSettings.addEventListener('click', () => {
@@ -127,23 +121,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Xử lý chọn Chế độ chơi: Sinh Tồn hoặc Sáng Tạo
-  document.querySelectorAll('.btn-select-mode').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      selectedMode = btn.getAttribute('data-mode');
-      closeModal(modalModeSelect);
-
-      if (selectedMode === 'survival') {
-        // Vào thẳng Hoạt cảnh Trong Xe 3D Góc Nhìn Thứ Nhất!
-        start3DDrivingScene();
-      } else {
-        // Chế độ Sáng Tạo: Vào thẳng không gian 3D First-Person để tự do bay lượn & khảo sát biệt thự
-        startFirstPersonMode('creative');
-      }
-    });
-  });
-
-  // 1. Khởi động Hoạt Cảnh Trong Xe 3D Góc Nhìn Thứ Nhất (3D In-Car Driving Scene)
+  // 1. Khởi động Hoạt Cảnh Mở Đầu 3D & Trong Xe Cảnh Sát (3D Opening Cinematic & In-Car Scene)
   function start3DDrivingScene() {
     if (audioManager.isMuted) {
       audioManager.toggleMute();
@@ -151,7 +129,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     mainMenu.style.display = 'none';
-    gameTransition.classList.remove('active');
+    if (gameTransition) gameTransition.classList.remove('active');
 
     if (currentBackground) {
       currentBackground.destroy();
@@ -162,9 +140,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     currentDrivingScene = new DrivingScene3D(
       freshCanvas,
-      // Khi xe dừng và hoàn tất hội thoại -> Bước xuống xe vào 3D First-Person!
+      // Sau khi kết thúc cảnh bay lên trời hiện tên game và bấm Tiếp Tục -> Bước vào thế giới 3D điều tra!
       () => {
-        startFirstPersonMode('survival');
+        startFirstPersonMode();
       },
       // Quay lại Menu nếu người chơi bấm ESC
       () => {
@@ -174,7 +152,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // 2. Khởi động Khám Phá 3D Góc Nhìn Thứ Nhất Ngoài Xe (First-Person 3D World)
-  function startFirstPersonMode(mode = 'survival') {
+  function startFirstPersonMode() {
     if (audioManager.isMuted) {
       audioManager.toggleMute();
       updateAudioUI(true);
@@ -190,13 +168,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     mainMenu.style.display = 'none';
-    gameTransition.classList.remove('active');
+    if (gameTransition) gameTransition.classList.remove('active');
 
     const freshCanvas = resetCanvas();
 
     currentWorld3D = new HorrorWorld3D(freshCanvas, () => {
       returnToMainMenu();
-    }, { mode });
+    });
   }
 
   // 3. Quay lại Menu Chính (2D Pixel Art)
@@ -214,9 +192,4 @@ document.addEventListener('DOMContentLoaded', () => {
     mainMenu.style.display = 'flex';
     currentBackground = new PixelBackground(freshCanvas);
   }
-
-  // Nút bắt đầu từ màn hình chuyển tiếp Sáng Tạo
-  btnStartGameplay.addEventListener('click', () => {
-    startFirstPersonMode(selectedMode);
-  });
 });
